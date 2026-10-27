@@ -1,0 +1,27 @@
+# Docker Compose for the Irregular Object Tracking dashboard.
+# Paths match config/config.py: PROJECT_ROOT/data (SQLite logs) and
+# PROJECT_ROOT/output (CSV/frame artifacts), both inside WORKDIR /app.
+services:
+  web:
+    build: .
+    image: irregular-tracking:latest
+    container_name: irregular-tracking
+    # Container listens on ${PORT:-8501} (see Dockerfile ENV/CMD).
+    ports:
+      - "${HOST_PORT:-8501}:${PORT:-8501}"
+    environment:
+      PORT: "${PORT:-8501}"
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      # Persistent storage for SQLite logs + exported artifacts. Named
+      # volumes inherit /app/data and /app/output ownership from the image.
+      - app-data:/app/data
+      - app-output:/app/output
+    restart: unless-stopped
+    # Health check is inherited from the Dockerfile (verified endpoint:
+    # /_stcore/health -> 200 "ok").
+
+volumes:
+  app-data:
+  app-output:

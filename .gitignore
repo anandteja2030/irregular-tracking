@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+.venv/
+.venv-audit/
+
+# Secrets / local environment (never commit)
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts: SQLite databases, logs, generated output
+output/
+data/*.db
+*.db
+*.sqlite
+*.sqlite3
+*.log
+nohup.out
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

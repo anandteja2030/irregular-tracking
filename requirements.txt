@@ -1,0 +1,12 @@
+# Core scientific stack
+numpy>=1.26,<3
+opencv-python-headless>=4.9,<5
+scipy>=1.11,<2
+scikit-learn>=1.4,<2
+pandas>=2.0,<3
+
+# Dashboard
+streamlit>=1.32,<2
+
+# Testing / tooling
+pytest>=8.0,<9

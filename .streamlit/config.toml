@@ -1,0 +1,14 @@
+# Streamlit production configuration (verified against streamlit 1.66.x).
+# No secrets belong here - use environment variables / your platform's
+# secret store instead (e.g. via `docker compose config` env injection).
+[server]
+headless = true          # never open a local browser inside the container
+address = "0.0.0.0"      # reachable from outside the container
+port = 8501              # default; CLI flag --server.port overrides with $PORT
+enableCORS = true
+enableXsrfProtection = true   # same-origin form protection for uploads
+maxUploadSize = 64       # MB - allows multi-minute mp4 uploads
+fileWatcherType = "none" # no inotify watchers needed in a container
+
+[browser]
+gatherUsageStats = false # no telemetry from production

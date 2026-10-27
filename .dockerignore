@@ -1,0 +1,28 @@
+# VCS / local environments
+.git
+.gitignore
+.venv
+.venv-audit
+
+# Python caches & test artifacts
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+*.egg-info
+
+# Runtime artifacts (regenerated at run time; logs hold no source value)
+output
+data/*.db
+
+# Editor / OS noise
+.DS_Store
+.idea
+.vscode
+
+# Large logs from local runs
+*.log
+
+# Note: samples/ (sample MP4s), tests/, config/, scripts/, README.md and
+# requirements.txt are intentionally NOT ignored - the image needs them for
+# sample-video support and in-container test runs.
