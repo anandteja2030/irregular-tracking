@@ -62,6 +62,32 @@ describe("error envelope", () => {
   });
 });
 
+describe("job conflicts", () => {
+  it("keeps the existing job id reachable on a duplicate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "job_duplicate",
+              message: "An identical job is already running.",
+              job_id: "job_existing9",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+
+    await expect(api.createJob({ kind: "sample", ref: "tiny_noise.mp4" })).rejects.toMatchObject({
+      status: 409,
+      code: "job_duplicate",
+      detail: { job_id: "job_existing9" },
+    });
+  });
+});
+
 describe("query building", () => {
   it("drops empty filters and encodes session ids", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -75,6 +101,40 @@ describe("query building", () => {
     expect(url).toBe(
       "/api/v1/sessions/api%201%2Fx/anomalies?limit=20&offset=0&sort=score",
     );
+  });
+
+  it("posts a job with the selected source and no invented cap", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ job: { job_id: "job_1", state: "queued" } }, 202),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createJob({ kind: "upload", ref: "0123456789abcdef01234567" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/jobs");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      source: { kind: "upload", ref: "0123456789abcdef01234567" },
+      max_frames: null,
+    });
+  });
+
+  it("cancels a job through its POST endpoint and reads preview media", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/media")
+        ? jsonResponse({ session: "run_a", available: false, frames: [] })
+        : jsonResponse({ job: { job_id: "job_1", state: "cancellation_requested" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.cancelJob("job_1");
+    await api.media("run a");
+
+    const [cancelUrl, cancelInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(cancelUrl).toBe("/api/v1/jobs/job_1/cancel");
+    expect(cancelInit.method).toBe("POST");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/sessions/run%20a/media");
   });
 
   it("targets the session collection with paging params", async () => {

@@ -13,16 +13,21 @@ import type {
   EngineConfig,
   EvaluationResponse,
   Health,
+  JobList,
+  JobSnapshot,
+  MediaResponse,
   ObservationItem,
   SceneResponse,
-  SessionItem,
+  SessionDetail,
   SessionList,
   SessionSummary,
   SourcesResponse,
   SystemStatus,
   TrackDetail,
+  TrackFramesResponse,
   TrackList,
   TrajectoryResponse,
+  UploadRecord,
 } from "./types";
 
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
@@ -70,11 +75,25 @@ function timeoutSignal(ms: number): AbortSignal {
   return controller.signal;
 }
 
+interface RequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  method?: "GET" | "POST";
+  body?: string;
+  headers?: Record<string, string>;
+}
+
 async function request<T>(
   path: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: RequestOptions = {},
 ): Promise<T> {
-  const { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
+  const {
+    signal,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    method = "GET",
+    body,
+    headers,
+  } = options;
   const budget = timeoutSignal(timeoutMs);
   const combined =
     signal && typeof AbortSignal !== "undefined" && "any" in AbortSignal
@@ -84,8 +103,9 @@ async function request<T>(
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
+      method,
+      headers: { Accept: "application/json", ...headers },
+      body,
       signal: combined,
     });
   } catch (cause) {
@@ -108,22 +128,7 @@ async function request<T>(
     }
   }
 
-  if (!response.ok) {
-    if (isErrorEnvelope(payload)) {
-      throw new ApiError(
-        response.status,
-        payload.error.code,
-        payload.error.message,
-        payload.error.detail,
-      );
-    }
-    throw new ApiError(
-      response.status,
-      `http_${response.status}`,
-      `${response.status} ${response.statusText || "request failed"}`,
-    );
-  }
-
+  if (!response.ok) throw errorFromPayload(response.status, payload, response.statusText);
   if (payload === null) {
     throw new ApiError(
       response.status,
@@ -133,6 +138,31 @@ async function request<T>(
   }
 
   return payload as T;
+}
+
+/** Maps any non-2xx body onto `ApiError`; the backend envelope when present. */
+export function errorFromPayload(
+  status: number,
+  payload: unknown,
+  statusText = "",
+): ApiError {
+  if (isErrorEnvelope(payload)) {
+    // The API puts error context as siblings of code/message (for example the
+    // existing job id on a 409). Keep it reachable through `detail`.
+    const { code, message, detail, ...extra } = payload.error as {
+      code: string;
+      message: string;
+      detail?: unknown;
+      [key: string]: unknown;
+    };
+    const context = detail ?? (Object.keys(extra).length > 0 ? extra : undefined);
+    return new ApiError(status, code, message, context);
+  }
+  return new ApiError(
+    status,
+    `http_${status}`,
+    `${status} ${statusText || "request failed"}`.trim(),
+  );
 }
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -153,6 +183,72 @@ export function queryString(params: Record<string, QueryValue>): string {
 const sessionPath = (sessionId: string) =>
   `/sessions/${encodeURIComponent(sessionId)}`;
 
+/**
+ * Uploads go through XMLHttpRequest instead of fetch: only XHR reports
+ * upload progress, and the bar must reflect bytes actually sent.
+ */
+export function uploadVideo(
+  file: File,
+  options: { onProgress?: (percent: number) => void; signal?: AbortSignal } = {},
+): Promise<UploadRecord> {
+  const { onProgress, signal } = options;
+  return new Promise<UploadRecord>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Upload cancelled", "AbortError"));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      fn();
+    };
+    const onAbort = () => xhr.abort();
+
+    xhr.open("POST", `${API_BASE}/videos/upload`);
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress?.(Math.min(100, Math.round((100 * event.loaded) / event.total)));
+      }
+    };
+    xhr.onload = () => {
+      let payload: unknown = null;
+      try {
+        payload = xhr.responseText ? (JSON.parse(xhr.responseText) as unknown) : null;
+      } catch {
+        payload = null;
+      }
+      finish(() => {
+        if (xhr.status >= 200 && xhr.status < 300 && payload !== null) {
+          resolve(payload as UploadRecord);
+        } else {
+          reject(errorFromPayload(xhr.status, payload, xhr.statusText));
+        }
+      });
+    };
+    xhr.onerror = () =>
+      finish(() =>
+        reject(
+          new ApiError(
+            0,
+            "network_error",
+            "The upload could not reach the analysis service.",
+          ),
+        ),
+      );
+    xhr.onabort = () =>
+      finish(() => reject(new DOMException("Upload cancelled", "AbortError")));
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const form = new FormData();
+    form.append("file", file);
+    xhr.send(form);
+  });
+}
+
 export const api = {
   health: (signal?: AbortSignal) =>
     request<Health>("/health", { signal, timeoutMs: 6_000 }),
@@ -166,7 +262,7 @@ export const api = {
     signal?: AbortSignal,
   ) => request<SessionList>(`/sessions${queryString(params)}`, { signal }),
   session: (sessionId: string, signal?: AbortSignal) =>
-    request<SessionItem>(sessionPath(sessionId), { signal }),
+    request<SessionDetail>(sessionPath(sessionId), { signal }),
   sessionSummary: (sessionId: string, signal?: AbortSignal) =>
     request<SessionSummary>(`${sessionPath(sessionId)}/summary`, { signal }),
 
@@ -205,6 +301,17 @@ export const api = {
       { signal },
     ),
 
+  trackFrames: (
+    sessionId: string,
+    trackId: number,
+    params: { limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    request<TrackFramesResponse>(
+      `${sessionPath(sessionId)}/tracks/${trackId}/frames${queryString(params)}`,
+      { signal },
+    ),
+
   anomalies: (
     sessionId: string,
     params: {
@@ -224,6 +331,33 @@ export const api = {
 
   scene: (sessionId: string, signal?: AbortSignal) =>
     request<SceneResponse>(`${sessionPath(sessionId)}/scene`, { signal }),
+  media: (sessionId: string, signal?: AbortSignal) =>
+    request<MediaResponse>(`${sessionPath(sessionId)}/media`, { signal }),
+
+  /* -------------------------------------------------------- video studio */
+  uploadVideo,
+  createJob: (
+    source: { kind: "sample" | "upload"; ref: string },
+    options: { maxFrames?: number | null; signal?: AbortSignal } = {},
+  ) =>
+    request<{ job: JobSnapshot }>("/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source,
+        max_frames: options.maxFrames ?? null,
+      }),
+      signal: options.signal,
+    }),
+  jobs: (params: { status?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) =>
+    request<JobList>(`/jobs${queryString(params)}`, { signal }),
+  job: (jobId: string, signal?: AbortSignal) =>
+    request<{ job: JobSnapshot }>(`/jobs/${encodeURIComponent(jobId)}`, { signal }),
+  cancelJob: (jobId: string, signal?: AbortSignal) =>
+    request<{ job: JobSnapshot }>(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+      signal,
+    }),
   evaluation: (sessionId: string, signal?: AbortSignal) =>
     request<EvaluationResponse>(`${sessionPath(sessionId)}/evaluation`, { signal }),
 };

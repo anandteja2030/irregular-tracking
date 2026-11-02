@@ -31,6 +31,8 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
         timeout: 300_000,
+        // The job progress socket lives under the same prefix.
+        ws: true,
       },
     },
   },

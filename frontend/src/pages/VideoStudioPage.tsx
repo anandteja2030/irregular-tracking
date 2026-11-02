@@ -1,10 +1,19 @@
-import { useState } from "react";
-import { api } from "../lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { api, ApiError, describeError } from "../lib/api";
 import { useResource } from "../hooks/useResource";
+import { useJobStream } from "../hooks/useJobStream";
+import { useSession } from "../app/SessionProvider";
+import { isActiveState, validateVideoFile } from "../lib/studio";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
-import { FilmIcon, LockIcon, RefreshIcon } from "../components/icons";
+import { LevelBadge, LevelMeter, Score } from "../components/SessionBits";
+import { StudioIntake, type UploadState } from "../components/StudioIntake";
+import { JobConsole } from "../components/JobConsole";
+import { FrameInvestigator } from "../components/FrameInvestigator";
+import { SessionHistoryPanel } from "../components/SessionHistoryPanel";
+import { FilmIcon, ImageIcon, PlayIcon, TrackIcon } from "../components/icons";
 import {
   formatBytes,
   formatDuration,
@@ -14,209 +23,549 @@ import {
   truncateMiddle,
 } from "../lib/format";
 
+const JOB_KEY = "neural-command.job";
+const EMPTY_UPLOAD: UploadState = { status: "idle", record: null, progress: null, error: null };
+
+function readStoredJob(): string | null {
+  try {
+    return window.sessionStorage.getItem(JOB_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function VideoStudioPage() {
-  const sources = useResource(api.sources, { pollMs: 60_000 });
-  const config = useResource(api.config);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const {
+    sessions,
+    selected,
+    selectedId,
+    select,
+    reload: reloadSessions,
+  } = useSession();
 
-  const list = sources.data?.sources ?? [];
-  const selected =
-    list.find((source) => source.path === selectedPath) ?? list[0] ?? null;
+  const [upload, setUpload] = useState<UploadState>(EMPTY_UPLOAD);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [duplicateJobId, setDuplicateJobId] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(readStoredJob);
+  const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<unknown>(null);
+  const uploadAbort = useRef<AbortController | null>(null);
+  const completedRef = useRef<string | null>(null);
 
-  const analytics = config.data?.anomaly;
-  const video = config.data?.video;
+  const stream = useJobStream(jobId);
+  const job = stream.job;
+
+  const sources = useResource(api.sources, { pollMs: 120_000 });
+  const summary = useResource(
+    (signal) => api.sessionSummary(selectedId as string, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "" },
+  );
+  const detail = useResource(
+    (signal) => api.session(selectedId as string, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "" },
+  );
+  const media = useResource(
+    (signal) => api.media(selectedId as string, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "" },
+  );
+  const events = useResource(
+    (signal) => api.anomalies(selectedId as string, { limit: 200, sort: "score" }, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "" },
+  );
+
+  useEffect(() => {
+    try {
+      if (jobId) window.sessionStorage.setItem(JOB_KEY, jobId);
+      else window.sessionStorage.removeItem(JOB_KEY);
+    } catch {
+      /* storage disabled — the job still streams for this page session */
+    }
+  }, [jobId]);
+
+  useEffect(() => () => uploadAbort.current?.abort(), []);
+
+  const completedSession = job?.state === "completed" ? job.session_id : null;
+  useEffect(() => {
+    if (!completedSession || completedRef.current === completedSession) return;
+    completedRef.current = completedSession;
+    reloadSessions();
+    select(completedSession);
+  }, [completedSession, reloadSessions, select]);
+
+  const handleFile = useCallback((file: File) => {
+    const check = validateVideoFile(file);
+    setFileError(check.error);
+    setStartError(null);
+    setDuplicateJobId(null);
+    if (!check.ok) return;
+
+    uploadAbort.current?.abort();
+    const controller = new AbortController();
+    uploadAbort.current = controller;
+    setUpload({ status: "uploading", record: null, progress: 0, error: null });
+
+    api
+      .uploadVideo(file, {
+        signal: controller.signal,
+        onProgress: (percent) =>
+          setUpload((previous) =>
+            previous.status === "uploading" ? { ...previous, progress: percent } : previous,
+          ),
+      })
+      .then((record) => setUpload({ status: "done", record, progress: 100, error: null }))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setUpload(EMPTY_UPLOAD);
+          return;
+        }
+        setUpload({ status: "error", record: null, progress: null, error });
+      });
+  }, []);
+
+  const startAnalysis = useCallback(
+    async (source: { kind: "sample" | "upload"; ref: string }) => {
+      setStarting(true);
+      setStartError(null);
+      setDuplicateJobId(null);
+      setCancelError(null);
+      try {
+        const payload = await api.createJob(source);
+        completedRef.current = null;
+        setJobId(payload.job.job_id);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "job_duplicate") {
+          const detailValue = error.detail as { job_id?: string } | undefined;
+          setDuplicateJobId(detailValue?.job_id ?? null);
+        }
+        setStartError(describeError(error));
+      } finally {
+        setStarting(false);
+      }
+    },
+    [],
+  );
+
+  const cancelJob = async () => {
+    if (!jobId) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await api.cancelJob(jobId);
+    } catch (error) {
+      setCancelError(error);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const openSession = (sessionId: string) => {
+    select(sessionId);
+    const target = document.getElementById("studio-results");
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const clearJob = () => {
+    setJobId(null);
+    setCancelError(null);
+    setDuplicateJobId(null);
+    setStartError(null);
+    completedRef.current = null;
+  };
+
+  const busy = upload.status === "uploading" || starting || Boolean(job && isActiveState(job.state));
+  const topEvents = (events.data?.anomalies ?? []).slice(0, 5);
+  const mediaMissing = detail.data ? !detail.data.media.available : false;
 
   return (
     <>
       <PageHeader
-        eyebrow="Intake"
+        eyebrow="Intake · analysis"
         title="Video Studio"
-        lede="The source inventory the engine actually sees, with measured metadata for every decodable clip. Analysis intake will bind to this surface."
+        lede="Upload a clip or run a bundled sample through the existing engine. Progress, counts and previews below come from the API exactly as reported — no simulated runs, no placeholder metrics."
         aside={
           <>
-            <span className="pill pill--warn">
-              <LockIcon width={11} height={11} />
-              Intake locked
+            <span className="pill pill--accent">
+              <FilmIcon width={11} height={11} />
+              {sources.data ? `${sources.data.valid} decodable clips` : "Source scan"}
             </span>
-            <button
-              type="button"
-              className={`btn ${sources.refreshing ? "is-spinning" : ""}`}
-              onClick={sources.reload}
-            >
-              <span className="btn__icon">
-                <RefreshIcon width={13} height={13} />
-              </span>
-              Rescan
-            </button>
+            <span className={`pill ${busy ? "pill--warn" : "pill--ok"}`}>
+              <PlayIcon width={11} height={11} />
+              {busy ? "Analysis running" : "Engine idle"}
+            </span>
           </>
         }
       />
 
-      <div className="layout-main-aside">
-        <div className="stack gap-14">
+      <div className="layout-studio">
         <Panel
-          title="Source inventory"
-          sub={sources.data ? `${sources.data.count} clips · ${sources.data.valid} decodable` : "samples directory"}
-          bodyClassName="panel__body--flush"
+          title="Ingest"
+          sub="Upload, validate, then start"
+          actions={<span className="tag">mp4 · mov · mkv · webm · avi</span>}
         >
+          <StudioIntake
+            upload={upload}
+            fileError={fileError}
+            startError={startError}
+            duplicateJobId={duplicateJobId}
+            busy={busy}
+            onFile={handleFile}
+            onCancelUpload={() => {
+              uploadAbort.current?.abort();
+              setUpload(EMPTY_UPLOAD);
+            }}
+            onAnalyse={() =>
+              upload.record &&
+              void startAnalysis({ kind: "upload", ref: upload.record.upload_id })
+            }
+            onDiscard={() => {
+              setUpload(EMPTY_UPLOAD);
+              setFileError(null);
+              setStartError(null);
+            }}
+            onOpenJob={() => {
+              if (duplicateJobId) {
+                completedRef.current = null;
+                setJobId(duplicateJobId);
+                setDuplicateJobId(null);
+              }
+            }}
+          />
+        </Panel>
+
+        <JobConsole
+          jobId={jobId}
+          stream={stream}
+          cancelling={cancelling}
+          cancelError={cancelError}
+          onCancel={() => void cancelJob()}
+          onClear={clearJob}
+          onInspect={openSession}
+        />
+      </div>
+
+      <section className="section">
+        <div className="section__head">
+          <span className="section__title">Sample footage</span>
+          <span className="section__meta">
+            {sources.data ? `${sources.data.count} clips in ${sources.data.directory}` : "resolving directory"}
+          </span>
+        </div>
+        <Panel bodyClassName="panel__body--flush">
           {sources.status === "error" ? (
-            <div className="panel__body">
-              <ErrorState error={sources.error} onRetry={sources.reload} />
+            <div className="panel__pad">
+              <ErrorState error={sources.error} onRetry={sources.reload} compact />
             </div>
           ) : sources.status === "loading" && !sources.data ? (
-            <div className="panel__body">
-              <LoadingRows rows={5} label="Loading source inventory" />
+            <div className="panel__pad">
+              <LoadingRows rows={3} label="Scanning bundled samples" />
             </div>
-          ) : list.length === 0 ? (
-            <div className="panel__body">
+          ) : (sources.data?.sources ?? []).length === 0 ? (
+            <div className="panel__pad">
               <EmptyState
-                title="No footage available"
-                body="Nothing in the samples directory is a decodable video. Add a clip there and rescan."
-                glyph={<FilmIcon width={17} height={17} />}
-                code={sources.data?.directory}
+                compact
+                title="No bundled footage"
+                body="The samples directory holds no decodable video. Upload a clip instead."
+                glyph={<FilmIcon width={16} height={16} />}
               />
             </div>
           ) : (
-            <ul className="source-list">
-              {list.map((source) => {
-                const active = selected?.path === source.path;
-                return (
-                  <li key={source.path}>
+            <ul className="sample-list">
+              {(sources.data?.sources ?? []).map((source) => (
+                <li key={source.path} className="sample-item">
+                  <span className="sample-item__glyph">
+                    <FilmIcon width={14} height={14} />
+                  </span>
+                  <div className="sample-item__body">
+                    <span className="sample-item__name">{source.name}</span>
+                    <span className="sample-item__meta mono">
+                      {formatResolution(source.width, source.height)} · {formatFps(source.fps)} ·{" "}
+                      {formatDuration(source.duration_s)} · {formatBytes(source.bytes)}
+                      {source.synthetic ? " · synthetic" : ""}
+                    </span>
+                  </div>
+                  {source.valid ? (
                     <button
                       type="button"
-                      className={`source-item ${active ? "is-selected" : ""}`}
-                      onClick={() => setSelectedPath(source.path)}
-                      aria-pressed={active}
+                      className="btn btn--quiet btn--sm"
+                      disabled={busy}
+                      onClick={() => void startAnalysis({ kind: "sample", ref: source.name })}
                     >
-                      <span className="source-item__glyph">
-                        <FilmIcon width={15} height={15} />
+                      <span className="btn__icon">
+                        <PlayIcon width={11} height={11} />
                       </span>
-                      <span className="source-item__body">
-                        <span className="source-item__line">
-                          <span className="source-item__name">{source.name}</span>
-                          {source.synthetic && <span className="tag">synthetic</span>}
-                          {!source.valid && <span className="pill pill--bad">unreadable</span>}
-                        </span>
-                        <span className="source-item__meta">
-                          {formatResolution(source.width, source.height)}
-                          <span className="sep">/</span>
-                          {formatFps(source.fps)}
-                          <span className="sep">/</span>
-                          {formatDuration(source.duration_s)}
-                          <span className="sep">/</span>
-                          {formatBytes(source.bytes)}
-                        </span>
-                      </span>
-                      <span className="source-item__index mono">
-                        {String(list.indexOf(source) + 1).padStart(2, "0")}
-                      </span>
+                      Analyse
                     </button>
-                  </li>
-                );
-              })}
+                  ) : (
+                    <span className="pill pill--bad">unreadable</span>
+                  )}
+                </li>
+              ))}
             </ul>
           )}
-          <footer className="panel__foot">
-            <span className="dot dot--live" />
-            {sources.data ? truncateMiddle(sources.data.directory, 44) : "resolving directory"}
-          </footer>
         </Panel>
+      </section>
 
-        <Panel
-          title="Preview stage"
-          sub={selected ? selected.name : "awaiting selection"}
-          actions={<span className="tag">{selected ? formatResolution(selected.width, selected.height) : "—"}</span>}
-          bodyClassName="panel__body--flush"
-          foot={
-            <>
-              <span className="dot dot--warn" />
-              frame transport connects with the session media layer
-            </>
-          }
-        >
-          <div className="stage">
-            <span className="stage__grid" aria-hidden="true" />
-            <span className="stage__corner stage__corner--tl" aria-hidden="true" />
-            <span className="stage__corner stage__corner--tr" aria-hidden="true" />
-            <span className="stage__corner stage__corner--bl" aria-hidden="true" />
-            <span className="stage__corner stage__corner--br" aria-hidden="true" />
-            <div className="stage__center">
-              <span className="stage__res">{selected ? formatResolution(selected.width, selected.height) : "—"}</span>
-              <span className="stage__meta">
-                {selected ? `${formatFps(selected.fps)} · ${formatDuration(selected.duration_s)} · ${formatNumber(selected.frames)} frames` : "choose a clip to inspect"}
-              </span>
-              <span className="stage__hint">decoded frames arrive with session media</span>
-            </div>
-            <span className="stage__timecode mono">00:00:00:00</span>
-          </div>
-        </Panel>
+      <section className="section" id="studio-results">
+        <div className="section__head">
+          <span className="section__title">Analysis results</span>
+          <span className="section__meta">
+            {selected
+              ? `${selected.session} · ${selected.source.label ?? "source unrecorded"}`
+              : "select or run a session"}
+          </span>
         </div>
 
-        <div className="stack gap-14">
-          <Panel title="Source telemetry" sub="Measured by OpenCV">
-            {selected ? (
-              <div className="stack gap-14">
-                <div className="source-preview" aria-hidden="true">
-                  <span className="source-preview__scan" />
-                  <div className="source-preview__center">
-                    <span className="source-preview__res mono">
-                      {formatResolution(selected.width, selected.height)}
-                    </span>
-                    <span className="source-preview__sub">{formatFps(selected.fps)}</span>
-                  </div>
-                  <span className="source-preview__label mono">{selected.name}</span>
+        <div className="layout-studio layout-studio--results">
+          <Panel
+            title="Result envelope"
+            sub="Persisted session aggregates"
+            actions={selected ? <span className="tag">{selected.session}</span> : undefined}
+          >
+            {!selectedId ? (
+              <EmptyState
+                compact
+                title="No session selected"
+                body="Finish an analysis or open a persisted session below to read its real aggregates."
+                glyph={<ImageIcon width={16} height={16} />}
+              />
+            ) : summary.status === "error" ? (
+              <ErrorState error={summary.error} onRetry={summary.reload} compact />
+            ) : summary.status === "loading" && !summary.data ? (
+              <LoadingRows rows={5} label="Loading session summary" />
+            ) : summary.data ? (
+              <div className="stack gap-16">
+                <div className="metric-grid metric-grid--four">
+                  <Metric label="Normal" value={formatNumber(summary.data.counts.levels.Normal)} tone="ok" />
+                  <Metric
+                    label="Suspicious"
+                    value={formatNumber(summary.data.counts.levels.Suspicious)}
+                    tone="warn"
+                  />
+                  <Metric
+                    label="Irregular"
+                    value={formatNumber(summary.data.counts.levels.Irregular)}
+                    tone="bad"
+                  />
+                  <Metric label="Tracks" value={formatNumber(summary.data.counts.tracks)} />
                 </div>
+
                 <div className="rows rows--tight">
-                  <ReadRow label="File" value={selected.name} />
-                  <ReadRow label="Frames" value={formatNumber(selected.frames)} />
-                  <ReadRow label="FPS" value={selected.fps ? selected.fps.toFixed(2) : "—"} />
-                  <ReadRow label="Duration" value={formatDuration(selected.duration_s)} />
-                  <ReadRow label="Size" value={formatBytes(selected.bytes)} />
-                  <ReadRow label="Kind" value={selected.kind} />
+                  <Row label="Frames processed" value={formatNumber(summary.data.processing.frames_processed)} />
+                  <Row
+                    label="Resolution"
+                    value={formatResolution(summary.data.processing.width, summary.data.processing.height)}
+                  />
+                  <Row label="Source fps" value={formatFps(summary.data.processing.fps)} />
+                  <Row
+                    label="Processing fps"
+                    value={formatFps(summary.data.processing.processing_fps)}
+                  />
+                  <Row
+                    label="Processing time"
+                    value={formatDuration(summary.data.processing.wall_s)}
+                  />
+                  <Row
+                    label="Video duration"
+                    value={formatDuration(summary.data.processing.video_duration_s)}
+                  />
+                  <Row label="Observations" value={formatNumber(summary.data.counts.observations)} />
+                  <Row label="Events" value={formatNumber(summary.data.counts.anomalies)} />
+                  <Row
+                    label="Tracks with events"
+                    value={`${formatNumber(summary.data.tracks.with_anomalies)} / ${formatNumber(summary.data.tracks.count)}`}
+                  />
+                  <Row
+                    label="Observed window"
+                    value={
+                      summary.data.temporal.observed_seconds === null
+                        ? "—"
+                        : formatDuration(summary.data.temporal.observed_seconds)
+                    }
+                  />
+                </div>
+
+                <div className="cluster">
+                  <span className="tag">{formatResolution(summary.data.processing.width, summary.data.processing.height)}</span>
+                  <span className="tag">{summary.data.source.kind ?? "unknown source"}</span>
+                  {summary.data.labels.labels === 0 && <span className="tag">no ground-truth labels</span>}
+                </div>
+
+                {selected && (
+                  <div className="row-actions">
+                    <Link className="btn btn--quiet btn--sm" to="/tracks">
+                      <span className="btn__icon">
+                        <TrackIcon width={12} height={12} />
+                      </span>
+                      Track Explorer
+                    </Link>
+                    <Link className="btn btn--quiet btn--sm" to="/anomalies">
+                      Open anomaly ledger
+                    </Link>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </Panel>
+
+          <Panel
+            title="Severity evidence"
+            sub="Highest fused scores in this session"
+            actions={
+              events.data ? (
+                <span className="tag">{formatNumber(events.data.total)} events</span>
+              ) : undefined
+            }
+          >
+            {!selectedId ? (
+              <EmptyState compact title="Nothing to rank yet" body="Events appear once a session is selected." />
+            ) : events.status === "error" ? (
+              <ErrorState error={events.error} onRetry={events.reload} compact />
+            ) : events.status === "loading" && !events.data ? (
+              <LoadingRows rows={4} label="Loading events" />
+            ) : topEvents.length === 0 ? (
+              <EmptyState
+                compact
+                title="No elevated events"
+                body="Every observation scored inside the Normal band, so the ledger stays empty rather than padded."
+              />
+            ) : (
+              <ul className="evidence-list">
+                {topEvents.map((event) => (
+                  <li key={event.event_id} className="evidence-item">
+                    <div className="evidence-item__head">
+                      <LevelBadge level={event.level} />
+                      <span className="mono">F{event.frame}</span>
+                      <span className="mono">T{String(event.track_id).padStart(2, "0")}</span>
+                      <Score value={event.scores.fused} />
+                    </div>
+                    <p className="evidence-item__summary">{truncateMiddle(event.summary, 118)}</p>
+                    {event.evidence?.rules?.length ? (
+                      <p className="evidence-item__rules mono">
+                        {event.evidence.rules.map((rule) => rule.rule).join(" · ")}
+                        {event.evidence.ml_note ? ` · ${event.evidence.ml_note}` : ""}
+                      </p>
+                    ) : (
+                      <p className="evidence-item__rules mono">
+                        {event.evidence?.available === false
+                          ? "rule evidence is no longer retained in this API process"
+                          : "no rule fired"}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section__head">
+          <span className="section__title">Video investigation</span>
+          <span className="section__meta">
+            {media.data
+              ? `${formatNumber(media.data.preview_count)} retained previews`
+              : "preview frames"}
+          </span>
+        </div>
+        <Panel bodyClassName="panel__body--flush" foot={
+          <>
+            <span className="dot dot--warn" />
+            {media.data
+              ? media.data.annotated_video.reason
+              : "No annotated video is produced by the engine; only retained preview frames exist."}
+          </>
+        }>
+          <FrameInvestigator
+            sessionId={selectedId}
+            media={media}
+            events={events.data?.anomalies ?? null}
+            eventsReady={Boolean(events.data)}
+            eventTotal={events.data?.total ?? 0}
+          />
+        </Panel>
+      </section>
+
+      <section className="section">
+        <div className="section__head">
+          <span className="section__title">Session history</span>
+          <span className="section__meta">
+            {sessions.length > 0 ? `${sessions.length} persisted runs` : "persisted runs"}
+          </span>
+        </div>
+        <div className="layout-studio layout-studio--history">
+          <Panel bodyClassName="panel__body--flush" title="Persisted sessions" sub="Newest first">
+            <SessionHistoryPanel sessions={sessions} selectedId={selectedId} onOpen={openSession} />
+          </Panel>
+
+          <Panel title="Historical availability" sub="What this session kept">
+            {!selectedId ? (
+              <EmptyState compact title="No session selected" body="Choose a run to see what was persisted." />
+            ) : detail.status === "error" ? (
+              <ErrorState error={detail.error} onRetry={detail.reload} compact />
+            ) : detail.status === "loading" && !detail.data ? (
+              <LoadingRows rows={4} label="Loading session detail" />
+            ) : detail.data ? (
+              <div className="stack gap-14">
+                <div className="rows rows--tight">
+                  <Row label="Preview frames" value={formatNumber(detail.data.media.preview_frames)} />
+                  <Row label="Preview stride" value={detail.data.media.preview_stride ? `${detail.data.media.preview_stride}` : "—"} />
+                  <Row label="Centroid paths" value={detail.data.artifacts.trajectories ? "retained" : "not retained"} />
+                  <Row label="Rule evidence" value={detail.data.artifacts.structured_evidence ? "retained" : "not retained"} />
+                  <Row label="Scene calibration" value={detail.data.artifacts.scene_calibration ? "retained" : "not retained"} />
+                  <Row label="Labels" value={formatNumber(detail.data.labels.labels)} />
+                </div>
+                {mediaMissing && (
+                  <div className="alert alert--warn" role="status">
+                    <ImageIcon width={14} height={14} />
+                    <div className="alert__body">
+                      <p className="alert__title">No media for this session</p>
+                      <p className="alert__text">
+                        Frames live only in the API process that analysed the run. This session's
+                        observations, tracks and events are still queryable from SQLite.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {detail.data.limitations.length > 0 && (
+                  <div>
+                    <p className="note__label">API limitations for this session</p>
+                    <ul className="note-list">
+                      {detail.data.limitations.map((limitation) => (
+                        <li key={limitation}>{limitation}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="cluster">
+                  <LevelMeter levels={detail.data.counts.levels} />
+                  <span className="tag">{formatNumber(detail.data.counts.observations)} observations</span>
+                  <span className="tag">{formatNumber(detail.data.counts.anomalies)} events</span>
                 </div>
               </div>
-            ) : (
-              <EmptyState compact title="No source selected" body="Choose a clip to inspect its metadata." />
-            )}
+            ) : null}
           </Panel>
-
-          <Panel title="Run envelope" sub="Read-only engine config">
-            {config.status === "error" ? (
-              <ErrorState error={config.error} onRetry={config.reload} compact />
-            ) : config.status === "loading" && !config.data ? (
-              <LoadingRows rows={4} label="Loading configuration" />
-            ) : (
-              <div className="rows rows--tight">
-                <ReadRow
-                  label="Resize"
-                  value={
-                    video?.frame_width && video?.frame_height
-                      ? formatResolution(video.frame_width, video.frame_height)
-                      : "native"
-                  }
-                />
-                <ReadRow label="Process fps" value={video?.process_fps ? String(video.process_fps) : "source"} />
-                <ReadRow label="Suspicious ≥" value={analytics ? analytics.threshold_suspicious.toFixed(2) : "—"} />
-                <ReadRow label="Irregular ≥" value={analytics ? analytics.threshold_irregular.toFixed(2) : "—"} />
-                <ReadRow label="Tracking age" value={config.data ? String(config.data.tracking.max_age) : "—"} />
-              </div>
-            )}
-          </Panel>
-
-          <div className="note">
-            <span className="note__label">Intake</span>
-            <p className="note__body">
-              Source selection is wired to the live inventory. Starting a run stays locked until the
-              studio intake is implemented — no job is submitted from this build.
-            </p>
-          </div>
         </div>
-      </div>
+      </section>
     </>
   );
 }
 
-function ReadRow({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, tone }: { label: string; value: string; tone?: "ok" | "warn" | "bad" }) {
+  return (
+    <div className="metric-cell">
+      <span className="metric-cell__label">{label}</span>
+      <span className="metric-cell__value">{value}</span>
+      {tone && <span className={`metric-cell__bar metric-cell__bar--${tone}`} />}
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="row">
       <span className="row__key">{label}</span>

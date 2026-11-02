@@ -294,6 +294,28 @@ export interface TrajectoryResponse {
   reason: string | null;
 }
 
+export interface TrackFrameItem {
+  frame: number;
+  ts_utc: string | null;
+  level: Level | null;
+  fused_score: number | null;
+  speed_px_s: number | null;
+  preview_available: boolean;
+  frame_url: string | null;
+}
+
+export interface TrackFramesResponse {
+  session: string;
+  track_id: number;
+  total: number;
+  count: number;
+  limit: number;
+  offset: number;
+  media_available: boolean;
+  reason: string | null;
+  frames: TrackFrameItem[];
+}
+
 export interface ObservationItem {
   event_id: number;
   session: string;
@@ -311,6 +333,26 @@ export interface ObservationItem {
   summary: string;
 }
 
+export interface RuleEvidence {
+  rule: string;
+  severity?: number | null;
+  description?: string | null;
+  [key: string]: unknown;
+}
+
+export interface AnomalyItem extends ObservationItem {
+  evidence: {
+    available: boolean;
+    source: string;
+    rules: RuleEvidence[];
+    ml_note: string | null;
+    scene_note: string | null;
+    zone: string | null;
+    zone_dwell_s: number | null;
+    appearance: { color: string | null; shape: string | null } | null;
+  };
+}
+
 export interface AnomalyList {
   total: number;
   count: number;
@@ -318,7 +360,7 @@ export interface AnomalyList {
   offset: number;
   severity: Level | null;
   event_type: string | null;
-  anomalies: ObservationItem[];
+  anomalies: AnomalyItem[];
 }
 
 export interface StatSummary {
@@ -367,6 +409,114 @@ export interface SceneResponse {
     affected_tracks: number;
     top_tracks: { track_id: number; max_scene_score: number; observations: number }[];
   };
+  notes: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Video Studio: uploads, analysis jobs and preview media.
+ * ------------------------------------------------------------------ */
+
+export interface VideoProbe {
+  valid: boolean;
+  error?: string | null;
+  fps: number | null;
+  frames: number | null;
+  width: number | null;
+  height: number | null;
+  duration_s: number | null;
+}
+
+export interface UploadRecord {
+  upload_id: string;
+  filename: string;
+  bytes: number;
+  content_type: string | null;
+  created_ts: string;
+  video: VideoProbe;
+}
+
+export type JobState =
+  | "queued"
+  | "running"
+  | "cancellation_requested"
+  | "cancelled"
+  | "completed"
+  | "failed";
+
+export interface JobResult {
+  frames_processed: number;
+  frame_width: number;
+  frame_height: number;
+  fps: number;
+  tracks: number;
+  observations: number;
+  levels: LevelCounts;
+  wall_s: number;
+}
+
+export interface JobSnapshot {
+  job_id: string;
+  session_id: string;
+  state: JobState;
+  stage: string;
+  source: {
+    kind: "sample" | "upload";
+    ref: string;
+    label: string;
+    max_frames: number | null;
+  };
+  progress: {
+    processed: number;
+    total: number | null;
+    percent: number | null;
+    measured: boolean;
+  };
+  timings: {
+    created_ts: string;
+    started_ts: string | null;
+    ended_ts: string | null;
+    elapsed_s: number | null;
+  };
+  error: { code: string; message: string } | null;
+  result: JobResult | null;
+}
+
+export interface JobList {
+  total: number;
+  count: number;
+  jobs: JobSnapshot[];
+}
+
+export interface SessionArtifacts {
+  retained: boolean;
+  trajectories: boolean;
+  structured_evidence: boolean;
+  scene_calibration: boolean;
+  preview_frames: number;
+}
+
+export interface SessionDetail extends SessionItem {
+  artifacts: SessionArtifacts;
+  media: { preview_frames: number; available: boolean; preview_stride: number | null };
+  labels: { labels: number; evaluation_url: string };
+  limitations: string[];
+}
+
+export interface PreviewFrameInfo {
+  frame: number;
+  ts_s: number;
+  annotated_url: string;
+  original_url: string;
+}
+
+export interface MediaResponse {
+  session: string;
+  available: boolean;
+  preview_stride: number | null;
+  preview_count: number;
+  source_resolution: { width: number; height: number } | null;
+  frames: PreviewFrameInfo[];
+  annotated_video: { available: boolean; reason: string };
   notes: string[];
 }
 
