@@ -39,9 +39,15 @@ python3 -m venv .venv
 
 - **Webcam:** pass `0`: `python -m scripts.run_pipeline 0` — requires a real
   camera device; nothing here can verify it from CI.
-- Any video file (mp4/avi/mkv) works the same way: `python -m scripts.run_pipeline path/to/file.mp4`.
+- **Supported inputs:** the CLI opens any video OpenCV/ffmpeg can decode (mp4,
+  avi, mov, mkv verified by tests); the dashboard uploader accepts
+  mp4/avi/mov/mkv.
+- **Invalid input is handled, not crashed on:** an unreadable or missing
+  source prints a friendly `error:` + `hint:` message and exits with code 2
+  (CLI), or shows a red error card instead of a traceback (dashboard).
 - Annotated frames + summaries are written under `output/`; SQLite events to
-  `data/app_data.db` and CSV exports on demand.
+  `data/app_data.db` and CSV exports on demand. Uploaded videos are saved as
+  `output/upload_*` and cleaned up automatically after 24 h.
 
 ## Docker (production)
 
@@ -63,7 +69,7 @@ docker run --rm -p 8501:8501 \
 # 3. verify health (endpoint verified on streamlit 1.66.x: 200 + body "ok")
 curl -f http://localhost:8501/_stcore/health && echo " healthy"
 
-# 4. run the 63-test suite inside the image
+# 4. run the 76-test suite inside the image
 docker run --rm irregular-tracking:latest python -m pytest tests -q
 
 # 5. or bring the stack up with Compose (persistent volumes for SQLite logs
@@ -87,19 +93,45 @@ docker compose down          # stop (volumes are kept)
 ## Architecture
 
 ```
-config/config.py            all tunables (HSV ranges, gates, rule/ML weights)
+config/config.py            all tunables (HSV ranges, gates, rule/ML weights,
+                            restricted zones)
 src/video/                  video sources (webcam/file/callables), HSV prep,
                             colour + shape detection
 src/tracking/               Kalman filter (NumPy replication) + TrackManager
                             (Hungarian via scipy, IDs, trajectories)
 src/analysis/               movement features, scenario self-calibration,
-                            SQLite/CSV logging
+                            SQLite/CSV logging, ground truth, evaluation metrics
 src/anomaly/                rule engine, Isolation Forest, weighted fusion
 src/ui/                     OpenCV overlay + Streamlit dashboard
+src/ui/session.py           per-run session model (frames, observations,
+                            tracks, scene stats - isolated from history)
+src/ui/pages/               the six dashboard pages (see below)
+src/ui/charts.py            Altair charts built from real session data
+src/ui/report.py            markdown session report builder
+src/ui/theme.py             dark theme, layout + shared components
 scripts/generate_samples.py synthetic sample videos
 scripts/run_pipeline.py     CLI entry point
-tests/                      pytest suites per phase (63 tests)
+tests/                      pytest suites per phase (96 tests)
 ```
+
+## Dashboard tour (six pages)
+
+`streamlit run src/ui/dashboard.py` opens a multi-page app with a compact
+sidebar (navigation, active session, DB/CLI shortcuts):
+
+| Page | What it shows |
+| --- | --- |
+| **Overview** | KPI cards from the active session, recent alerts, activity timeline, session summary, pipeline capability notes, bundled-sample picker. Complete-looking empty state before any run. |
+| **Video Studio** | The workspace: upload (mp4/avi/mov/mkv) or pick a sample, frame budget, real progress during analysis, then a frame-by-frame viewer with annotated/original toggle, bounding boxes, track IDs, trajectory trails, HUD, timestamps and per-frame level chips. Friendly error cards for corrupt/unsupported input. |
+| **Track Explorer** | Searchable track list, per-track KPIs (duration, observations, mean/max speed, path length, straightness, events), trajectory plot, speed-over-time with mean reference, direction mix, event history table, per-track CSV export. |
+| **Anomaly Center** | Filterable/searchable event table + timeline; selecting an event shows its timestamp, track, severity, fused/rule/ML/scene score breakdown, triggered rules, evidence frame and the human-readable explanation. Rule-based evidence is visually separated from Isolation-Forest output. |
+| **Scene Intelligence** | Learned baseline (speed percentiles, dominant flow, calibration sample count/status), speed distribution vs baseline, per-track deviation, a working restricted-zone editor with dwell evidence, and honest limitation notes. |
+| **Evaluation & Reports** | Measured processing stats; ground-truth labelling per track → precision/recall/F1/FPR/accuracy + confusion matrix **only when both classes are labelled** (single-class runs say so instead of faking numbers); markdown session report, CSV/JSON exports, and stored-session history (save/load/delete, isolated per session). |
+
+Every chart, counter and table reads the active session's real observations —
+nothing is generated for display. Synthetic bundled samples are labelled as
+synthetic. Webcam capture is intentionally CLI-only (a deployed Streamlit
+server has no camera attached).
 
 ## Anomaly reasoning — how each verdict is produced
 
@@ -128,7 +160,7 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 
 ## What is verified vs what is not
 
-**Verified by the test suite (63 tests, all passing):**
+**Verified by the test suite (96 tests, all passing):**
 - video-input contract, preprocessing purity/cleanup, HSV masks incl. red
   wrap-around, shape classification, area filters
 - Kalman constant-velocity convergence, noisy-measurement smoothing,
@@ -139,17 +171,39 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 - rule severity bounds, Isolation-Forest low-scores-normal / high-scores-
   anomalous behaviour, per-track shift detection, fusion levels,
   human-readable explanations
-- SQLite logging + CSV export contracts
+- SQLite logging + CSV export contracts, session-idempotent event rewrites,
+  cross-session track summaries (composite key) and legacy-DB schema migration
 - **end-to-end on real video files** generated by `scripts/generate_samples.py`:
   normal clip calibrates and tracks; anomaly clip yields non-Normal verdicts
   with explanations; noise clip runs clean; logger writes DB/CSV
+- **the dashboard itself** via `streamlit.testing.v1.AppTest`: all six pages
+  navigate and render (empty states before a run, no exceptions), Video Studio
+  analysis produces a session with evidence rows, a corrupt source shows a
+  friendly error card — not a traceback, anomaly filtering and event
+  investigation work, track search filters, the zone editor round-trips,
+  evaluation reports real metrics and an honest single-class fallback, session
+  save/history round-trips, and reports disclose measured values only. The real
+  server was also started (`streamlit run ...`) and served in a headless
+  Chromium: all pages captured with zero console errors.
+- **ground truth & metrics:** precision/recall/F1/FPR/accuracy against known
+  values, rejection of single-class/empty labels, unlabelled-count accounting,
+  ground-truth CSV round-trip and validation.
+- **CLI contract:** unreadable/missing sources exit with code 2 and a friendly
+  message (no traceback); mp4 and avi inputs both run end-to-end; re-running
+  the same source **replaces** its rows instead of appending a duplicate copy
+  of every observation, and each run records `run_stats` (frames, resolution,
+  wall time, synthetic flag) for the dashboard's history panel.
+- **longer videos:** a 1800-frame (60 s) clip processed at ~18 fps with a
+  ~277 MB peak RSS (memory stays bounded; dashboard previews are capped and
+  downscaled).
 
-**Not verified here (requires hardware):**
+**Not verified here (requires hardware or a browser):**
 - **Webcam playback** `VideoSource(src=0)` is implemented via cv2 but cannot
   be exercised from this environment - run it on a machine with a camera.
-- **Streamlit interactive UX** was smoke-tested (server boots, page serves
-  HTTP 200, no import/runtime errors in its log); clicking through upload /
-  sliders in a browser is left to the user.
+- **Browser-only dashboard interactions:** dragging the frame-preview slider
+  and the actual file-upload widget in a real browser (the upload *code path*
+  is covered by tests through source resolution, sanitization and error
+  handling; AppTest cannot drive the uploader widget itself).
 - My colour ranges are tuned for saturated shapes on dark backgrounds
   (like the samples); real footage needs `config/config.py` range tuning.
 
@@ -164,6 +218,26 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
   birth keep human-readable context. This is documented, not hidden.
 - Positions/velocities are in pixels and px/s; adding a homography for
   real-world m/s would be a natural next step.
+- Dashboard previews keep every ~6th frame, downscaled to 640 px wide, and
+  the frame budget slider caps a run at 1200 frames — this keeps the cached
+  payload small on long videos instead of loading them fully into memory.
+- `sudden_acceleration` fires on the synthetic samples' loop seam (a clip
+  built by repeating another video teleports objects back to the start);
+  real footage has no such seam.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `error: cannot read source ...` (exit 2) | File missing, empty, or not a video. Regenerate samples: `.venv/bin/python scripts/generate_samples.py`. |
+| Dashboard says *No sample videos found* | `samples/` is empty — run `scripts/generate_samples.py` or upload a file. |
+| *Could not open ...* error card in the dashboard | Corrupt/unsupported upload. Use mp4/avi/mov/mkv re-encoded from the source. |
+| Webcam: `cannot read source '0'` | No camera attached (SSH/VM/container), or the camera is held by another process. Expected in Docker/CI — run the webcam on the host machine. |
+| `Address already in use` when starting Streamlit | Another process holds 8501: `streamlit run src/ui/dashboard.py --server.port 8502`. |
+| Counts differ between CLI and dashboard | They process different frame budgets — the dashboard slider caps frames (default 450); set it to the full length for a like-for-like run. |
+| Suspicious rows on an otherwise normal video | The fusion is deliberately sensitive: Suspicious (≥0.35) is a soft flag; check the *Irregular* count and the per-row `why` text to judge. |
+| `ModuleNotFoundError: No module named 'config'` | Launching from an odd directory is handled by a path bootstrap — if you still see it, run from the project root or use `.venv/bin/python -m scripts.run_pipeline ...`. |
+| Slow long videos | Lower the frame-budget slider; processing is ~18 fps at 720p on a modest CPU. |
 
 ## Testing
 
@@ -175,3 +249,11 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 
 Logs: `data/app_data.db` (tables `track_events`, `track_summaries`),
 `output/*.csv`.
+
+Expected outcome on the bundled samples (verified):
+
+| Clip | Result |
+| --- | --- |
+| `samples/normal_traffic.mp4` (300 frames) | **0 Irregular**, 64 Suspicious, 536 Normal |
+| `samples/anomaly_clip.mp4` (420 frames) | **69 Irregular**, 256 Suspicious, 743 Normal — runner/loiterer caught |
+| `samples/tiny_noise.mp4` (40 frames) | runs clean, no detections, no crash |

@@ -1,0 +1,76 @@
+/* Design tokens: layered surfaces, restrained indigo/electric accents. */
+:root {
+  color-scheme: dark;
+
+  /* Depth stack */
+  --void: #040508;
+  --deep: #07080d;
+  --raise-1: #0b0d14;
+  --raise-2: #101321;
+
+  /* Ink */
+  --ink-100: #f3f5fb;
+  --ink-80: #d3d8e6;
+  --ink-60: #a2a9bd;
+  --ink-45: #7d8499;
+  --ink-30: #5b6275;
+  --ink-18: #3a4053;
+
+  /* Lines */
+  --hairline: rgba(255, 255, 255, 0.065);
+  --hairline-2: rgba(255, 255, 255, 0.1);
+  --hairline-3: rgba(255, 255, 255, 0.16);
+
+  /* Glass */
+  --glass: rgba(15, 17, 25, 0.66);
+  --glass-soft: rgba(17, 20, 30, 0.42);
+  --glass-strong: rgba(20, 23, 34, 0.86);
+  --glass-blur: blur(22px) saturate(135%);
+
+  /* Accents */
+  --indigo: #707bff;
+  --indigo-bright: #97a0ff;
+  --indigo-dim: rgba(112, 123, 255, 0.14);
+  --electric: #4fe3ff;
+  --electric-dim: rgba(79, 227, 255, 0.12);
+  --ok: #46dda6;
+  --warn: #ffc46b;
+  --bad: #ff6485;
+
+  /* Type */
+  --sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace,
+    "SF Mono", Menlo, Consolas, monospace;
+
+  /* Geometry */
+  --r-xs: 7px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --rail-w: 252px;
+  --rail-w-compact: 76px;
+  --topbar-h: 62px;
+
+  /* Elevation */
+  --shadow-panel: 0 30px 70px -46px rgba(0, 0, 0, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --shadow-float: 0 18px 48px -20px rgba(0, 0, 0, 0.8);
+  --glow-accent: 0 0 0 1px rgba(112, 123, 255, 0.32),
+    0 12px 36px -16px rgba(112, 123, 255, 0.55);
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --fast: 140ms;
+  --base: 260ms;
+  --slow: 480ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 1ms;
+    --base: 1ms;
+    --slow: 1ms;
+  }
+}

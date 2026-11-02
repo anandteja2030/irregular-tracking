@@ -26,10 +26,12 @@ class RuleEngine:
 
     def __init__(self, config: RuleConfig | None = None):
         self.cfg = config or load_config().anomaly.rule
+        self.zone_cfg = load_config().zone
 
     # ------------------------------------------------------------ facade
     def evaluate(self, snap: MovementSnapshot, stats: SceneStats | None,
-                 traj: TrajectoryStats | None = None) -> list[RuleSignal]:
+                 traj: TrajectoryStats | None = None,
+                 zone: tuple[str, float] | None = None) -> list[RuleSignal]:
         out: list[RuleSignal] = []
         out += self.rule_excessive_speed(snap, stats)
         out += self.rule_against_flow(snap, stats)
@@ -37,6 +39,8 @@ class RuleEngine:
         out += self.rule_sudden_accel(snap, stats)
         if traj is not None:
             out += self.rule_loitering(snap, traj)
+        if zone is not None:
+            out += self.rule_zone_violation(zone)
         return out
 
     # ------------------------------------------------------------ rules
@@ -103,6 +107,25 @@ class RuleEngine:
             rule="sudden_acceleration",
             severity=round(sev, 3),
             description=f"{verb} abruptly ({a:+.0f} px/s^2)",
+        )]
+
+    def rule_zone_violation(self, zone: tuple[str, float]) -> list[RuleSignal]:
+        """Fires when an object dwells inside a restricted zone long enough.
+
+        `zone` is (zone_name, dwell_seconds_so_far). The threshold comes from
+        the (enabled) zone configuration, so the rule is silent unless zones
+        are actually configured.
+        """
+        name, dwell = zone
+        threshold = self.zone_cfg.dwell_seconds
+        if not self.zone_cfg.enabled or dwell < threshold:
+            return []
+        sev = min(1.0, 0.5 + 0.5 * (dwell - threshold) / max(threshold * 2.0, 1e-6))
+        return [RuleSignal(
+            rule="zone_violation",
+            severity=round(sev, 3),
+            description=(f"dwelled {dwell:.1f} s inside restricted zone "
+                         f"'{name}' (threshold {threshold:.1f} s)"),
         )]
 
     def rule_loitering(self, snap: MovementSnapshot, traj: TrajectoryStats) -> list[RuleSignal]:

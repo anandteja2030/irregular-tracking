@@ -111,13 +111,22 @@ class AnomalyConfig(MLAnomalyConfig):
 
 
 @dataclass
+class ZoneConfig:
+    """Restricted / monitored zones (relative coordinates 0..1 of frame size).
+
+    Zones are disabled by default; the Scene Intelligence page can enable and
+    edit them before running the pipeline. A track that dwells inside a zone
+    longer than `dwell_seconds` fires the `zone_violation` rule.
+    """
+    enabled: bool = False
+    zones: list = field(default_factory=list)   # [{name, x1, y1, x2, y2}]
+    dwell_seconds: float = 3.0
+
+
+@dataclass
 class DashboardConfig:
-    page_title: str = "Intelligent Irregular Object Tracking"
-    sidebar_options: dict = field(default_factory=lambda: {
-        "live": "Live camera/video",
-        "upload": "Upload video file",
-        "export": "CSV export / DB inspection",
-    })
+    page_title: str = ("NEURAL COMMAND - Intelligent Irregular Object "
+                       "Tracking")
 
 
 @dataclass
@@ -138,6 +147,7 @@ class Settings:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    zone: ZoneConfig = field(default_factory=ZoneConfig)
     paths: AppPaths = field(default_factory=AppPaths)
 
 

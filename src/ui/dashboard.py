@@ -1,186 +1,114 @@
-"""Phase 7 - Streamlit dashboard.
+"""Multi-page dashboard shell: navigation, global sidebar status, theme.
 
 Run with:
-    .venv/bin/streamlit run src/ui/dashboard.py       (see README for exact path)
+    .venv/bin/streamlit run src/ui/dashboard.py
 
-Layout:
-  sidebar  - source picker (bundled samples / uploaded file), run button
-  main     - annotated frame previews, level counts, scene-calibration panel,
-             per-events table, track summaries, recent anomalies, CSV exports
+Pages (each a file under src/ui/pages/):
+    Overview | Video Studio | Track Explorer | Anomaly Center |
+    Scene Intelligence | Evaluation & Reports | Settings
 
-The dashboard replays a video through the same TrackingPipeline used by the
-CLI so numbers match. A webcam tab also runs the same code path (see
-`process_camera`), but a webcam needs a browser/local host, so it degrades
-gracefully with a notice when unavailable.
+The shell owns the session lifecycle: Video Studio writes
+``st.session_state["session_result"]`` (a src.ui.session.SessionResult) and
+``st.session_state["analysis_state"]`` (running/done/error), and every other
+page reads them. Webcam capture stays CLI-only
+(``python -m scripts.run_pipeline 0``) because a deployed server has no
+camera; invalid sources surface friendly errors, never tracebacks.
 """
 from __future__ import annotations
 
 import sys
-from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
-# Allow launching from any working directory (streamlit run / containers):
-# make the project root importable so `config`, `src`, ... resolve.
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import pandas as pd
 import streamlit as st
 
 from config.config import load_config
-from src.analysis.logger import ResultLogger
-from src.pipeline import TrackingPipeline
-from src.video.video_input import VideoSource
+from src.ui.session import cleanup_stale_uploads
+from src.ui.theme import (brand_html, inject_css, status_card, status_row)
 
-st.set_page_config(page_title="Intelligent Irregular Object Tracking",
-                   page_icon="👁️", layout="wide")
+st.set_page_config(page_title=load_config().dashboard.page_title,
+                   page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="expanded")
 
+inject_css()
 
-def _session_id() -> str:
-    return datetime.now(timezone.utc).strftime("s_%H%M%S")
+st.sidebar.markdown(brand_html(), unsafe_allow_html=True)
+cleanup_stale_uploads(load_config().paths.output)
 
-
-@st.cache_data(show_spinner=False)
-def read_video_to_frames(src: str, max_frames: int | None = None):
-    """Process the whole video once, returning annotated frames + stats.
-
-    Caching keeps every Streamlit rerun instant while tuning.
-    """
-    with VideoSource(src=src) as vs:
-        pipeline = TrackingPipeline(session=_session_id())
-        frames, entries = [], []
-        total = vs.frame_count() or max_frames or 1
-        processed = 0
-        for vf in vs:
-            res = pipeline.process_frame(vf.bgr, vf.index, vf.fps)
-            if processed % 6 == 0:             # ~6 fps preview cadence
-                frames.append(res.annotated_bgr)
-            entries.extend(dict(e, frame=e["frame_idx"]) for e in res.entries)
-            processed += 1
-            if max_frames and processed >= max_frames:
-                break
-        summaries = pipeline.summarize_tracks(vs.fps)
-        return frames, pd.DataFrame(entries), summaries, pipeline
+_pages = [
+    st.Page("pages/overview.py", title="Overview",
+            icon=":material/dashboard:", default=True),
+    st.Page("pages/video_studio.py", title="Video Studio",
+            icon=":material/movie:"),
+    st.Page("pages/tracks.py", title="Track Explorer",
+            icon=":material/travel_explore:"),
+    st.Page("pages/anomaly_center.py", title="Anomaly Center",
+            icon=":material/warning:"),
+    st.Page("pages/scene.py", title="Scene Intelligence",
+            icon=":material/place:"),
+    st.Page("pages/evaluation.py", title="Evaluation & Reports",
+            icon=":material/assessment:"),
+    st.Page("pages/settings.py", title="Settings",
+            icon=":material/settings:"),
+]
+_nav = st.navigation(_pages, position="sidebar")
 
 
-def summarize_frames(entries_df: pd.DataFrame) -> Counter:
-    if entries_df.empty:
-        return Counter()
-    return Counter(entries_df["level"].tolist())
+# ---- global status card (sidebar): session / processing / calibration
+def _sidebar_status() -> str:
+    """Rows for the status card; every value comes from real session state."""
+    res = st.session_state.get("session_result")
+    err = st.session_state.get("session_error")
+    state = st.session_state.get("analysis_state", "")
+    ts = st.session_state.get("analysis_ts", "")
 
-
-def track_summaries_frame(summaries: list[dict]) -> pd.DataFrame:
-    rows = []
-    for s in summaries:
-        stats = s["stats"]
-        rows.append({
-            "track": s["track_id"], "color": s["color"], "shape": s["shape"],
-            "seconds": round(stats.n_seconds, 2),
-            "mean_speed_px_s": round(stats.mean_speed_px_s, 1),
-            "max_speed_px_s": round(stats.max_speed_px_s, 1),
-            "path_length_px": round(stats.path_length_px, 1),
-            "straightness": round(stats.straightness, 3),
-        })
-    return pd.DataFrame(rows)
-
-
-def main() -> None:
-    cfg = load_config()
-    st.title("Intelligent Irregular Object Tracking & Scene-Aware Anomaly Detection")
-    st.caption("Colour/contour detection, Kalman+Hungarian tracking, "
-               "self-calibration, rule + Isolation-Forest fusion")
-
-    samples = sorted(Path(cfg.paths.samples).glob("*.mp4"))
-    with st.sidebar:
-        st.header("Input")
-        options = [f"sample: {p.name}" for p in samples]
-        upload_placeholder = st.empty()
-        uploaded = upload_placeholder.file_uploader(
-            "or upload a video (mp4/avi)", type=["mp4", "avi", "mov", "mkv"])
-        if uploaded is not None:
-            tmp = Path(cfg.paths.output) / f"upload_{uploaded.name}"
-            tmp.write_bytes(uploaded.getvalue())
-            options.append(f"upload: {uploaded.name}")
-        src_label = st.selectbox("choose", options, index=0 if options else None)
-        max_frames = st.slider("process up to N frames", 50, 1200, 450, step=50)
-        run = st.button("Run pipeline", type="primary")
-
-    if not run or src_label is None:
-        if not samples and uploaded is None:
-            st.info("No sample videos found. Generate them with "
-                    "`python scripts/generate_samples.py` or upload a file.")
-        else:
-            st.info("Pick a source and press **Run pipeline**.")
-        return
-
-    src = (Path(cfg.paths.samples) / src_label.split("sample: ", 1)[1]
-           if src_label.startswith("sample:") else
-           Path(cfg.paths.output) / f"upload_{src_label.split('upload: ', 1)[1]}")
-
-    with st.spinner("Replaying video through the tracking pipeline..."):
-        frames, df, summaries, pipeline = read_video_to_frames(str(src),
-                                                              int(max_frames))
-
-    # ---- top: annotated preview
-    st.subheader("Annotated frames (preview every ~6th frame)")
-    if frames:
-        idx = st.slider("frame preview", 0, len(frames) - 1, 0)
-        st.image(frames[idx][:, :, ::-1], channels="RGB")
+    if state == "running":
+        sys_row = status_row("warn", "System", "Processing\u2026", live=True)
+    elif err:
+        sys_row = status_row("bad", "System", "Last run failed")
+    elif res is not None and not getattr(res, "error", None):
+        sys_row = status_row("ok", "System", "Ready")
     else:
-        st.warning("no frames processed - check the source file")
+        sys_row = status_row("idle", "System", "Idle\u00b7no session")
 
-    # ---- counts
-    c1, c2, c3, c4 = st.columns(4)
-    counts = summarize_frames(df)
-    c1.metric("Normal", counts.get("Normal", 0))
-    c2.metric("Suspicious", counts.get("Suspicious", 0))
-    c3.metric("Irregular", counts.get("Irregular", 0))
-    c4.metric("Distinct tracks", len(summaries))
-    st.caption(f"calibrated: {pipeline.calibrator.is_ready()} "
-               f"({pipeline.calibrator.stats().n_samples} movement samples)")
+    has_run = res is not None and not getattr(res, "error", None)
+    sample = (res.source_label if has_run else "\u2014")
+    sample_row = status_row("ok" if has_run else "idle", "Sample", sample)
 
-    # ---- events
-    st.subheader("Detected anomalies & explanations")
-    if df.empty:
-        st.write("No tracked objects found.")
+    if has_run:
+        proc = (f"{res.frames_processed} frames \u00b7 {res.proc_fps:.1f} fps "
+                f"\u00b7 {res.wall_s:.1f}s")
+    elif ts:
+        proc = f"last run {ts}"
     else:
-        show = df[df["level"] != "Normal"]
-        if show.empty:
-            st.success("No anomalies detected in the processed range.")
-        else:
-            st.dataframe(show[["frame", "track_id", "level", "fused_score",
-                               "speed_px_s", "direction_deg", "why"]])
+        proc = "\u2014 awaiting first run"
+    proc_row = status_row("ok" if has_run else "idle", "Process", proc)
 
-    # ---- summaries
-    st.subheader("Trajectory summaries")
-    ts_df = track_summaries_frame(summaries)
-    st.dataframe(ts_df)
+    scene = getattr(res, "scene", None) if has_run else None
+    if scene is not None and scene.ready:
+        cal = status_row("ok", "Calib", f"ready \u00b7 {scene.n_samples} samples")
+    elif scene is not None:
+        cal = status_row("warn", "Calib",
+                         f"warming \u00b7 {scene.n_samples} samples", live=True)
+    else:
+        cal = status_row("idle", "Calib", "\u2014 no baseline")
 
-    # ---- persistence + export
-    st.subheader("Export")
-    csv_path = Path(cfg.paths.output) / "dashboard_events.csv"
-    kept = df.to_csv(index=False)
-    st.download_button("Downloads: per-observation CSV (this session)",
-                       data=kept, file_name="dashboard_events.csv",
-                       mime="text/csv")
-    traj_csv_path = Path(cfg.paths.output) / "dashboard_track_summaries.csv"
-    st.download_button("Download: trajectory summaries CSV",
-                       data=ts_df.to_csv(index=False),
-                       file_name="dashboard_track_summaries.csv",
-                       mime="text/csv")
-    if st.button("Append summaries to session database"):
-        log = ResultLogger(cfg.paths.db, session=_session_id())
-        try:
-            for s in summaries:
-                stats = s["stats"]
-                log.log_track_summary(stats, s["color"], s["shape"],
-                                      s["first_frame"], s["last_frame"])
-            st.success(f"Summary rows appended to {cfg.paths.db}")
-        finally:
-            log.close()
+    sid = status_row("idle", "Session",
+                     res.session if has_run else "\u2014")
+    return sys_row + sample_row + proc_row + cal + sid
 
 
-if __name__ == "__main__":
-    main()
+with st.sidebar:
+    st.markdown(status_card(_sidebar_status()), unsafe_allow_html=True)
+    if st.session_state.get("session_error"):
+        st.error(st.session_state["session_error"])
+    st.markdown(
+        '<div class="muted" style="font-size:.7rem;line-height:1.6;">'
+        'SQLite <code>data/app_data.db</code><br>'
+        'CLI <code>python -m scripts.run_pipeline &lt;video&gt;</code>'
+        "</div>", unsafe_allow_html=True)
+
+_nav.run()

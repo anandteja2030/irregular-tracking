@@ -14,7 +14,6 @@ so writers/displays can treat them interchangeably.
 """
 from __future__ import annotations
 
-import math
 from collections import Counter
 
 import cv2
@@ -74,6 +73,26 @@ def draw_tracked_objects(frame_bgr: np.ndarray, entries: list[dict]) -> np.ndarr
     return out
 
 
+def draw_zones(frame_bgr: np.ndarray, zones: list) -> np.ndarray:
+    """Overlay restricted zones (relative 0..1 coords) with translucent fill."""
+    if not zones:
+        return frame_bgr
+    out = frame_bgr.copy()
+    h, w = out.shape[:2]
+    overlay = out.copy()
+    for z in zones:
+        x1, y1 = int(float(z["x1"]) * w), int(float(z["y1"]) * h)
+        x2, y2 = int(float(z["x2"]) * w), int(float(z["y2"]) * h)
+        x1, x2 = sorted((max(0, min(w - 1, x1)), max(0, min(w - 1, x2))))
+        y1, y2 = sorted((max(0, min(h - 1, y1)), max(0, min(h - 1, y2))))
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (245, 180, 60), -1)
+        cv2.rectangle(out, (x1, y1), (x2, y2), (245, 180, 60), 2)
+        label = str(z.get("name", "zone"))[:24]
+        cv2.putText(out, label, (x1 + 4, max(14, y1 + 14)), FONT, 0.45,
+                    (245, 180, 60), 1, cv2.LINE_AA)
+    return cv2.addWeighted(overlay, 0.18, out, 0.82, 0)
+
+
 def draw_calibration_badge(frame_bgr: np.ndarray, ready: bool, n_samples: int) -> np.ndarray:
     chip = "CALIBRATED" if ready else f"CALIBRATING... n={n_samples}"
     color = LEVEL_COLORS["Normal"] if ready else LEVEL_COLORS["Suspicious"]
@@ -82,13 +101,3 @@ def draw_calibration_badge(frame_bgr: np.ndarray, ready: bool, n_samples: int) -
     chip_pos = (w - 12 - 11 * len(chip), h - 18)
     cv2.putText(out, chip, chip_pos, FONT, 0.45, color, 1, cv2.LINE_AA)
     return out
-
-
-def contour_debug_frame(preprocess_result, detections: list) -> np.ndarray:
-    """Side-by-side debug: HSV mask view raw + detected boxes. Useful live UI."""
-    mask = np.zeros(preprocess_result.gray.shape, np.uint8)
-    out = cv2.cvtColor(preprocess_result.gray, cv2.COLOR_GRAY2BGR)
-    for d in detections:
-        x, y, w, h = d.bbox
-        cv2.rectangle(out, (x, y), (x + w, y + h), LEVEL_COLORS["Suspicious"], 1)
-    return np.hstack([cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), out])

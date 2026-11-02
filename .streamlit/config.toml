@@ -10,5 +10,13 @@ enableXsrfProtection = true   # same-origin form protection for uploads
 maxUploadSize = 64       # MB - allows multi-minute mp4 uploads
 fileWatcherType = "none" # no inotify watchers needed in a container
 
+[theme]
+base = "dark"
+primaryColor = "#6366f1"          # restrained indigo accent (sliders, radios, buttons)
+backgroundColor = "#0a0c11"       # page background
+secondaryBackgroundColor = "#141824"  # inputs, panels
+textColor = "#e6e9f2"
+font = "sans serif"
+
 [browser]
 gatherUsageStats = false # no telemetry from production

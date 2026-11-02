@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Allow `python scripts/run_pipeline.py` from any working directory.
@@ -26,6 +28,7 @@ import cv2
 from config.config import load_config
 from src.analysis.logger import ResultLogger
 from src.pipeline import TrackingPipeline
+from src.ui.session import is_synthetic_source
 from src.video.video_input import VideoSource
 
 
@@ -41,30 +44,60 @@ def main() -> None:
     session = args.source.split("/")[-1] if isinstance(src, str) else "webcam"
     logger = ResultLogger(cfg.paths.db, session=session)
     writer = None
+    out_w = out_h = 0                 # filled from the first processed frame
+    started_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    t0 = time.monotonic()
 
     try:
-        with VideoSource(src=src, loop=args.loop) as vs:
-            pipeline = TrackingPipeline(session=session, logger=logger)
-            print(f"source: {vs.source_kind()}  fps={vs.fps:.1f}")
-            for vf in vs:
-                res = pipeline.process_frame(vf.bgr, vf.index, vf.fps)
-                if args.save:
-                    if writer is None:
-                        writer = cv2.VideoWriter(
-                            args.save,
-                            cv2.VideoWriter_fourcc("m", "p", "4", "v"),
-                            vs.fps, (res.annotated_bgr.shape[1],
-                                     res.annotated_bgr.shape[0]))
-                    writer.write(res.annotated_bgr)
-                if vf.index % int(max(1.0, vs.fps)) == 0:  # ~1 Hz console feed
-                    n_anom = sum(e["level"] != "Normal" for e in res.entries)
-                    print(f"frame {vf.index:4d}  dets={res.n_detections} "
-                          f"tracks={len(res.entries)} anomalous_now={n_anom} "
-                          f"calibrated={res.calibrated}")
-            pipeline.summarize_tracks(vs.fps)
-            last = pipeline.tracker.all_time_tracks()
-            print(f"done: frames={pipeline.n_frames} "
-                  f"total_tracks={len(last)}")
+        try:
+            with VideoSource(src=src, loop=args.loop) as vs:
+                pipeline = TrackingPipeline(session=session, logger=logger)
+                print(f"source: {vs.source_kind()}  fps={vs.fps:.1f}")
+                # Re-running the same source replaces its rows instead of
+                # appending a second copy of every observation.
+                logger.clear_session_events(session)
+                logger.clear_session_summaries(session)
+                for vf in vs:
+                    res = pipeline.process_frame(vf.bgr, vf.index, vf.fps)
+                    out_h, out_w = res.annotated_bgr.shape[:2]
+                    if args.save:
+                        if writer is None:
+                            writer = cv2.VideoWriter(
+                                args.save,
+                                cv2.VideoWriter_fourcc("m", "p", "4", "v"),
+                                vs.fps, (res.annotated_bgr.shape[1],
+                                         res.annotated_bgr.shape[0]))
+                        writer.write(res.annotated_bgr)
+                    if vf.index % int(max(1.0, vs.fps)) == 0:  # ~1 Hz console feed
+                        n_anom = sum(e["level"] != "Normal" for e in res.entries)
+                        print(f"frame {vf.index:4d}  dets={res.n_detections} "
+                              f"tracks={len(res.entries)} anomalous_now={n_anom} "
+                              f"calibrated={res.calibrated}")
+                pipeline.summarize_tracks(vs.fps)
+                last = pipeline.tracker.all_time_tracks()
+                logger.log_run({
+                    "session": session, "source": str(args.source),
+                    "kind": vs.source_kind(),
+                    "synthetic": bool(isinstance(src, str)
+                                      and is_synthetic_source(src)),
+                    "frames": pipeline.n_frames,
+                    "width": out_w, "height": out_h,
+                    "fps": float(vs.fps),
+                    "wall_s": round(time.monotonic() - t0, 2),
+                    "max_frames": None,
+                    "started_ts": started_ts,
+                    "ended_ts": datetime.now(timezone.utc).isoformat(
+                        timespec="seconds"),
+                })
+                print(f"done: frames={pipeline.n_frames} "
+                      f"total_tracks={len(last)}")
+        except (OSError, TypeError, cv2.error, ValueError) as exc:
+            # Friendly invalid-input handling: no traceback, a stable exit code.
+            print(f"error: cannot read source {args.source!r}: {exc}",
+                  file=sys.stderr)
+            print("hint: pass an existing video file (mp4/avi/mov/mkv) "
+                  "or a webcam index such as 0", file=sys.stderr)
+            sys.exit(2)
     finally:
         if writer is not None:
             writer.release()
