@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { AppRoutes } from "../App";
 import { ApiHealthProvider } from "../app/ApiHealthProvider";
 
@@ -251,6 +251,18 @@ function mockFetch(overrides: Partial<Record<string, Response>> = {}) {
   return fetchMock;
 }
 
+function LinkNavigator() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      onClick={() => navigate(`/tracks?session=${SESSION}&track=0&frame=18`)}
+    >
+      Open linked track
+    </button>
+  );
+}
+
 function renderExplorer(path = `/tracks?session=${SESSION}`) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -329,6 +341,27 @@ describe("track explorer", () => {
       "is-active",
     );
     expect(screen.queryByText(/not in this session's retained preview set/)).toBeNull();
+  });
+
+  it("reacts to a deep link while the explorer is already mounted", async () => {
+    mockFetch();
+    render(
+      <MemoryRouter initialEntries={[`/tracks?session=${SESSION}&track=3`]}>
+        <ApiHealthProvider>
+          <AppRoutes />
+          <LinkNavigator />
+        </ApiHealthProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("T03 · measured lifecycle and motion");
+    fireEvent.click(screen.getByRole("button", { name: "Open linked track" }));
+
+    await screen.findByText("T00 · measured lifecycle and motion");
+    await waitFor(() => expect(screen.getAllByText("F00018").length).toBeGreaterThan(0));
+    expect(screen.getByRole("button", { name: /Track T00/ }).className).toContain(
+      "is-active",
+    );
   });
 
   it("jumps to a retained anomaly frame and is honest when it is not retained", async () => {

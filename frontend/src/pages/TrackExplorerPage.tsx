@@ -54,6 +54,10 @@ export function TrackExplorerPage() {
   const [sort, setSort] = useState<TrackSort>("anomalies");
   const [offset, setOffset] = useState(0);
   const [focusFrame, setFocusFrame] = useState<number | null>(linkedFrame.current);
+  const trackParam = integerParam(searchParams, "track");
+  const frameParam = integerParam(searchParams, "frame");
+  const linkKey = `${selectedId ?? "none"}:${trackParam ?? ""}:${frameParam ?? ""}`;
+  const lastLinkKey = useRef<string | null>(null);
 
   const sessionKey = selectedId ?? "none";
   const params = trackListParams(levelFilter, sort);
@@ -128,14 +132,26 @@ export function TrackExplorerPage() {
     { enabled: Boolean(selectedId) && activeId !== null, key: `${tickKey}:frames` },
   );
 
+  // React to every deep link, including one delivered while this page is
+  // already mounted (browser history, or a link from another surface).
   useEffect(() => {
-    setPickedTrack(targetTrack.current);
+    if (lastLinkKey.current === linkKey) return;
+    lastLinkKey.current = linkKey;
+    targetTrack.current = trackParam;
+    linkedFrame.current = frameParam;
+    setPickedTrack(trackParam);
     setQuery("");
     setLevelFilter("all");
     setSort("anomalies");
     setOffset(0);
-    setFocusFrame(linkedFrame.current);
-  }, [selectedId]);
+    setFocusFrame(frameParam);
+    // The active track may already be the link target, in which case the
+    // activeId effect below will not run again; consume the request now.
+    if (trackParam !== null && trackParam === activeId) {
+      linkedFrame.current = null;
+      targetTrack.current = null;
+    }
+  }, [activeId, frameParam, linkKey, trackParam]);
 
   useEffect(() => {
     setOffset(0);

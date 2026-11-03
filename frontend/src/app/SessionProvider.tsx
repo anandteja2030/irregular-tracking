@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -53,6 +54,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   });
   const sessions = useMemo(() => list.data?.sessions ?? [], [list.data]);
   const [storedId, setStoredId] = useState<string | null>(readStored);
+  const locallySelected = useRef<string | null>(null);
 
   useEffect(() => {
     setStoredId(readStored());
@@ -70,12 +72,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   const select = useCallback(
     (sessionId: string) => {
+      locallySelected.current = sessionId;
       writeStored(sessionId);
       setStoredId(sessionId);
       setSearchParams(
         (previous) => {
           const next = new URLSearchParams(previous);
           next.set("session", sessionId);
+          // Track, event and frame parameters describe the previous session.
+          // Keeping them would invent an equivalent entity in the new run.
+          next.delete("track");
+          next.delete("event");
+          next.delete("frame");
           return next;
         },
         { replace: true },
@@ -83,6 +91,34 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     },
     [setSearchParams],
   );
+
+  // A link can name a session this store no longer has. Fall back in state as
+  // before, but also repair the URL so it does not keep advertising a run that
+  // is not selected (and drop entity parameters scoped to that missing run).
+  useEffect(() => {
+    if (paramId === null || list.status !== "ready") return;
+    if (sessions.some((session) => session.session === paramId)) {
+      // Only consume the marker for this id; a stale effect for the previous
+      // URL must not clear a newer selection made while it was pending.
+      if (locallySelected.current === paramId) locallySelected.current = null;
+      return;
+    }
+    // A completed job selects its new session before the list poll includes
+    // it. Do not rewrite that selection back to an older run while waiting.
+    if (locallySelected.current === paramId) return;
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (selectedId) next.set("session", selectedId);
+        else next.delete("session");
+        next.delete("track");
+        next.delete("event");
+        next.delete("frame");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [list.status, paramId, selectedId, sessions, setSearchParams]);
 
   const selected = useMemo(
     () => sessions.find((session) => session.session === selectedId) ?? null,

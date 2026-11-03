@@ -23,7 +23,9 @@ export function useApiHealth(): ResourceState<Health> {
 export type ApiPhase = "linking" | "online" | "offline";
 
 export function apiPhase(health: ResourceState<Health>): ApiPhase {
+  // A failed poll must win over the last healthy payload: keeping the previous
+  // "ok" data is useful for rendering, but it is not current liveness.
+  if (health.error || health.status === "error") return "offline";
   if (health.data && health.data.status === "ok") return "online";
-  if (health.status === "error") return "offline";
   return "linking";
 }
