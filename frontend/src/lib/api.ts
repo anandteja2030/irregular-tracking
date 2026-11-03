@@ -11,6 +11,8 @@ import type {
   AnomalyDetail,
   AnomalyList,
   ApiErrorEnvelope,
+  ConfigResetResponse,
+  ConfigUpdateResponse,
   EngineConfig,
   EvaluationResponse,
   Health,
@@ -79,7 +81,7 @@ function timeoutSignal(ms: number): AbortSignal {
 interface RequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT";
   body?: string;
   headers?: Record<string, string>;
 }
@@ -340,6 +342,21 @@ export const api = {
   sources: (signal?: AbortSignal) =>
     request<SourcesResponse>("/sources", { signal, timeoutMs: 30_000 }),
   config: (signal?: AbortSignal) => request<EngineConfig>("/config", { signal }),
+  updateConfig: (
+    patch: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) =>
+    request<ConfigUpdateResponse>("/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+      signal,
+    }),
+  resetConfig: (signal?: AbortSignal) =>
+    request<ConfigResetResponse>("/config/reset", {
+      method: "POST",
+      signal,
+    }),
 
   sessions: (
     params: { limit?: number; offset?: number } = {},

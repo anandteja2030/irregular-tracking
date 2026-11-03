@@ -18,6 +18,25 @@ export interface StorageEntry {
   files?: number;
 }
 
+export interface SystemLimits {
+  max_upload_bytes: number;
+  upload_ttl_s: number;
+  max_workers: number;
+  max_frames_cap: number;
+}
+
+export interface SystemFormats {
+  extensions: string[];
+  mime_types: string[];
+}
+
+export interface SystemConfiguration {
+  writable: boolean;
+  persistence: "process_local" | string;
+  resets_on_restart: boolean;
+  paths_read_only: boolean;
+}
+
 export interface SystemStatus {
   version: string;
   python: string;
@@ -33,6 +52,10 @@ export interface SystemStatus {
     executable: string;
     pid: number;
   };
+  /** Present on current API builds; absent values are not invented. */
+  limits?: SystemLimits;
+  formats?: SystemFormats;
+  configuration?: SystemConfiguration;
 }
 
 export interface SourceEntry {
@@ -127,6 +150,16 @@ export interface EngineConfig {
     read_only: boolean;
   };
   [section: string]: unknown;
+}
+
+export interface ConfigUpdateResponse {
+  config: EngineConfig;
+  applied: string[];
+  changed: boolean;
+}
+
+export interface ConfigResetResponse extends ConfigUpdateResponse {
+  reset_to_defaults: true;
 }
 
 export interface ApiErrorEnvelope {

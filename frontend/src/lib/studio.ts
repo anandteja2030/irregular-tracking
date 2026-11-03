@@ -4,14 +4,14 @@
 import { API_BASE } from "./api";
 import type { JobSnapshot, JobState } from "./types";
 
-/** Mirrors the API's accepted extensions (`src/api/uploads.py`). */
+/** Fallback list for older API builds; current builds report this via /system. */
 export const ACCEPTED_EXTENSIONS = [".mp4", ".m4v", ".mov", ".avi", ".mkv", ".webm"] as const;
 
 export const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
-/** The upload cap is enforced server-side while streaming. This is the API's
- * documented default (`NEURAL_MAX_UPLOAD_MB`); a deployment with a different
- * cap still answers with its own 413 message, which the UI shows verbatim. */
+/** Fallback cap for older API builds (`NEURAL_MAX_UPLOAD_MB` defaults to 256).
+ * Current builds report the enforced cap via /system; the server still rejects
+ * an oversized stream with its own message if /system is unavailable. */
 export const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
 
 const ACCEPTED_MIME = new Set([
@@ -23,6 +23,29 @@ const ACCEPTED_MIME = new Set([
   "video/mp4v-es",
   "application/octet-stream",
 ]);
+
+export interface VideoIntakeLimits {
+  extensions?: readonly string[];
+  mimeTypes?: readonly string[];
+  maxUploadBytes?: number;
+}
+
+function normalizedExtensions(extensions?: readonly string[]): string[] {
+  const values = (extensions ?? ACCEPTED_EXTENSIONS)
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .map((value) => (value.startsWith(".") ? value : `.${value}`));
+  return values.length > 0 ? values : [...ACCEPTED_EXTENSIONS];
+}
+
+export function acceptAttribute(extensions?: readonly string[]): string {
+  return normalizedExtensions(extensions).join(",");
+}
+
+function megabytes(bytes: number): string {
+  const value = bytes / (1024 * 1024);
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} MB`;
+}
 
 export interface FileLike {
   name: string;
@@ -41,29 +64,36 @@ function extensionOf(name: string): string {
 }
 
 /** Client-side gate only: the API repeats every check after the bytes land. */
-export function validateVideoFile(file: FileLike): FileCheck {
+export function validateVideoFile(file: FileLike, limits?: VideoIntakeLimits): FileCheck {
+  const extensions = normalizedExtensions(limits?.extensions);
+  const maxBytes = limits?.maxUploadBytes ?? MAX_UPLOAD_BYTES;
+  const mimeTypes = new Set(
+    (limits?.mimeTypes && limits.mimeTypes.length > 0 ? limits.mimeTypes : [...ACCEPTED_MIME]).map(
+      (value) => value.trim().toLowerCase(),
+    ),
+  );
   const extension = extensionOf(file.name ?? "");
   if (!extension) {
-    return { ok: false, error: "That file has no extension, so its container cannot be trusted. Pick an mp4, mov, mkv, webm or avi clip." };
+    return { ok: false, error: `That file has no extension, so its container cannot be trusted. Pick ${extensions.join(", ")}.` };
   }
-  if (!(ACCEPTED_EXTENSIONS as readonly string[]).includes(extension)) {
+  if (!extensions.includes(extension)) {
     return {
       ok: false,
-      error: `Unsupported format "${extension}". Accepted: ${ACCEPTED_EXTENSIONS.join(", ")}.`,
+      error: `Unsupported format "${extension}". Accepted: ${extensions.join(", ")}.`,
     };
   }
   if (file.size <= 0) {
     return { ok: false, error: "That file is empty — there is nothing to analyse." };
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
+  if (file.size > maxBytes) {
     return {
       ok: false,
-      error: `That clip is ${(file.size / (1024 * 1024)).toFixed(0)} MB; the API rejects uploads above its 256 MB default cap.`,
+      error: `That clip is ${(file.size / (1024 * 1024)).toFixed(0)} MB; the API's current cap is ${megabytes(maxBytes)}.`,
     };
   }
   const type = (file.type ?? "").split(";")[0].trim().toLowerCase();
-  if (type && !ACCEPTED_MIME.has(type)) {
-    return { ok: false, error: `The browser reports "${type}", which is not a video content type.` };
+  if (type && !mimeTypes.has(type)) {
+    return { ok: false, error: `The browser reports "${type}", which is not a supported video content type.` };
   }
   return { ok: true, error: null };
 }

@@ -1,7 +1,12 @@
 import { useRef, useState } from "react";
 import type { DragEvent } from "react";
 import type { UploadRecord } from "../lib/types";
-import { ACCEPT_ATTRIBUTE, ACCEPTED_EXTENSIONS, MAX_UPLOAD_BYTES } from "../lib/studio";
+import {
+  ACCEPTED_EXTENSIONS,
+  MAX_UPLOAD_BYTES,
+  acceptAttribute,
+  type VideoIntakeLimits,
+} from "../lib/studio";
 import { formatBytes, formatDuration, formatFps, formatNumber, formatResolution } from "../lib/format";
 import { AlertIcon, FilmIcon, PlayIcon, RefreshIcon, UploadIcon } from "./icons";
 
@@ -18,6 +23,8 @@ interface StudioIntakeProps {
   startError: string | null;
   duplicateJobId: string | null;
   busy: boolean;
+  limits?: VideoIntakeLimits;
+  limitsReported?: boolean;
   onFile: (file: File) => void;
   onCancelUpload: () => void;
   onAnalyse: () => void;
@@ -33,6 +40,8 @@ export function StudioIntake({
   startError,
   duplicateJobId,
   busy,
+  limits,
+  limitsReported = false,
   onFile,
   onCancelUpload,
   onAnalyse,
@@ -54,6 +63,8 @@ export function StudioIntake({
 
   const record = upload.record;
   const uploading = upload.status === "uploading";
+  const extensions = limits?.extensions?.length ? limits.extensions : ACCEPTED_EXTENSIONS;
+  const maxUploadBytes = limits?.maxUploadBytes ?? MAX_UPLOAD_BYTES;
 
   return (
     <div className="intake">
@@ -70,7 +81,7 @@ export function StudioIntake({
           ref={inputRef}
           type="file"
           className="sr-only"
-          accept={ACCEPT_ATTRIBUTE}
+          accept={acceptAttribute(extensions)}
           aria-label="Video file"
           onChange={(event) => {
             take(event.target.files?.[0]);
@@ -84,7 +95,8 @@ export function StudioIntake({
           {uploading ? "Uploading to the analysis service" : "Drop a clip here, or choose a file"}
         </p>
         <p className="dropzone__hint">
-          {ACCEPTED_EXTENSIONS.join(" · ")} — up to {formatBytes(MAX_UPLOAD_BYTES)} (the API enforces its own cap)
+          {extensions.join(" · ")} — up to {formatBytes(maxUploadBytes)}{" "}
+          {limitsReported ? "(reported by /system)" : "(fallback; the API still enforces its cap)"}
         </p>
         <div className="dropzone__actions">
           <button

@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, describeError } from "../lib/api";
 import { useResource } from "../hooks/useResource";
 import { useJobStream } from "../hooks/useJobStream";
 import { useSession } from "../app/SessionProvider";
-import { isActiveState, validateVideoFile } from "../lib/studio";
+import {
+  ACCEPTED_EXTENSIONS,
+  isActiveState,
+  validateVideoFile,
+  type VideoIntakeLimits,
+} from "../lib/studio";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
@@ -58,6 +63,19 @@ export function VideoStudioPage() {
   const job = stream.job;
 
   const sources = useResource(api.sources, { pollMs: 120_000 });
+  const system = useResource(api.system, { pollMs: 60_000 });
+  const intakeLimits = useMemo<VideoIntakeLimits | undefined>(() => {
+    if (!system.data?.limits) return undefined;
+    return {
+      maxUploadBytes: system.data.limits.max_upload_bytes,
+      extensions: system.data.formats?.extensions,
+      mimeTypes: system.data.formats?.mime_types,
+    };
+  }, [system.data]);
+  const intakeExtensions = intakeLimits?.extensions?.length
+    ? intakeLimits.extensions
+    : ACCEPTED_EXTENSIONS;
+  const intakeFormatLabel = intakeExtensions.map((extension) => extension.replace(/^\./, "")).join(" · ");
   const summary = useResource(
     (signal) => api.sessionSummary(selectedId as string, signal),
     { enabled: Boolean(selectedId), key: selectedId ?? "" },
@@ -95,7 +113,7 @@ export function VideoStudioPage() {
   }, [completedSession, reloadSessions, select]);
 
   const handleFile = useCallback((file: File) => {
-    const check = validateVideoFile(file);
+    const check = validateVideoFile(file, intakeLimits);
     setFileError(check.error);
     setStartError(null);
     setDuplicateJobId(null);
@@ -122,7 +140,7 @@ export function VideoStudioPage() {
         }
         setUpload({ status: "error", record: null, progress: null, error });
       });
-  }, []);
+  }, [intakeLimits]);
 
   const startAnalysis = useCallback(
     async (source: { kind: "sample" | "upload"; ref: string }) => {
@@ -204,7 +222,16 @@ export function VideoStudioPage() {
         <Panel
           title="Ingest"
           sub="Upload, validate, then start"
-          actions={<span className="tag">mp4 · mov · mkv · webm · avi</span>}
+          actions={<span className="tag">{intakeFormatLabel}</span>}
+          foot={
+            system.data?.limits ? undefined : (
+              <>
+                <span className="dot dot--warn" />
+                Current API limits are unavailable; using the documented fallback. The server still
+                validates formats and rejects oversized uploads.
+              </>
+            )
+          }
         >
           <StudioIntake
             upload={upload}
@@ -212,6 +239,8 @@ export function VideoStudioPage() {
             startError={startError}
             duplicateJobId={duplicateJobId}
             busy={busy}
+            limits={intakeLimits}
+            limitsReported={Boolean(system.data?.limits)}
             onFile={handleFile}
             onCancelUpload={() => {
               uploadAbort.current?.abort();

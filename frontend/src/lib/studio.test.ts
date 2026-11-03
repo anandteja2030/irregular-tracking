@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_UPLOAD_BYTES,
+  acceptAttribute,
   isActiveState,
   isTerminalState,
   jobSocketUrl,
@@ -48,6 +49,21 @@ describe("intake validation", () => {
   it("rejects a non-video content type", () => {
     expect(validateVideoFile({ name: "clip.mp4", size: MB, type: "application/pdf" }).ok).toBe(false);
   });
+
+  it("uses the cap and formats reported by /system when supplied", () => {
+    const limits = {
+      maxUploadBytes: 4 * MB,
+      extensions: [".mp4"],
+      mimeTypes: ["video/mp4"],
+    };
+    const oversized = validateVideoFile({ name: "big.mp4", size: 5 * MB, type: "video/mp4" }, limits);
+    expect(oversized.ok).toBe(false);
+    expect(oversized.error).toContain("4.0 MB");
+
+    const unsupported = validateVideoFile({ name: "clip.mov", size: MB, type: "video/quicktime" }, limits);
+    expect(unsupported.ok).toBe(false);
+    expect(unsupported.error).toContain("Accepted: .mp4");
+  });
 });
 
 describe("job presentation", () => {
@@ -93,6 +109,11 @@ describe("socket and preview helpers", () => {
     expect(jobSocketUrl("job_abc", "http://api.internal:8000/api/v1/", "https://x.example")).toBe(
       "ws://api.internal:8000/api/v1/jobs/job_abc/ws",
     );
+  });
+
+  it("builds an accept attribute from live extensions", () => {
+    expect(acceptAttribute(["mp4", ".MOV"])).toBe(".mp4,.mov");
+    expect(acceptAttribute([])).toContain(".mp4");
   });
 
   it("clamps preview navigation to the retained frame set", () => {
