@@ -1,338 +1,240 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "../app/SessionProvider";
 import { api } from "../lib/api";
 import { useResource } from "../hooks/useResource";
+import type { AnomalyItem } from "../lib/types";
+import { eventSpan } from "../lib/anomalies";
+import { formatNumber } from "../lib/format";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
-import { LevelBadge, Pager, Score } from "../components/SessionBits";
+import { EmptyState } from "../components/StateViews";
 import { AnomalyIcon } from "../components/icons";
-import { formatNumber, truncateMiddle } from "../lib/format";
+import { AnomalySummary } from "../components/AnomalySummary";
+import { AnomalyTimeline } from "../components/AnomalyTimeline";
+import { AnomalyLedger } from "../components/AnomalyLedger";
+import { AnomalyDetailPanel } from "../components/AnomalyDetailPanel";
+import { FrameInvestigator } from "../components/FrameInvestigator";
 
-const EVENT_PAGE = 20;
+const FETCH_CHUNK = 500;
+const MAX_EVENTS = 5_000;
 
-type Severity = "all" | "Suspicious" | "Irregular";
+interface LoadedEvents {
+  rows: AnomalyItem[];
+  total: number;
+  truncated: boolean;
+}
+
+/** Read every elevated event in bounded pages so filters, search, timeline and
+ * summary statistics all operate on the same honest set. */
+async function loadAllAnomalies(
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<LoadedEvents> {
+  const rows: AnomalyItem[] = [];
+  let total = 0;
+  let offset = 0;
+  for (;;) {
+    const page = await api.anomalies(
+      sessionId,
+      { sort: "frame", limit: FETCH_CHUNK, offset },
+      signal,
+    );
+    total = page.total;
+    rows.push(...page.anomalies);
+    offset += page.anomalies.length;
+    if (page.anomalies.length === 0 || offset >= total || rows.length >= MAX_EVENTS) {
+      break;
+    }
+  }
+  return { rows, total, truncated: rows.length < total };
+}
 
 export function AnomalyCenterPage() {
-  const config = useResource(api.config);
-  const anomaly = config.data?.anomaly;
-  const weights = anomaly?.weights;
   const { selected, selectedId } = useSession();
-  const [severity, setSeverity] = useState<Severity>("all");
-  const [offset, setOffset] = useState(0);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const sessionKey = selectedId ?? "none";
 
-  const events = useResource(
+  const summary = useResource(
+    (signal) => api.sessionSummary(selectedId as string, signal),
+    { enabled: Boolean(selectedId), key: sessionKey },
+  );
+  const tracks = useResource(
     (signal) =>
-      api.anomalies(
-        selectedId as string,
-        {
-          severity: severity === "all" ? undefined : severity,
-          sort: "score",
-          limit: EVENT_PAGE,
-          offset,
-        },
-        signal,
-      ),
-    { enabled: Boolean(selectedId), key: `${selectedId}:${severity}:${offset}` },
+      api.tracks(selectedId as string, { sort: "anomalies", limit: 200 }, signal),
+    { enabled: Boolean(selectedId), key: sessionKey },
+  );
+  const config = useResource(api.config);
+  const events = useResource(
+    (signal) => loadAllAnomalies(selectedId as string, signal),
+    { enabled: Boolean(selectedId), key: sessionKey },
+  );
+  const media = useResource((signal) => api.media(selectedId as string, signal), {
+    enabled: Boolean(selectedId),
+    key: sessionKey,
+  });
+  const detail = useResource(
+    (signal) =>
+      api.anomalyDetail(selectedId as string, selectedEventId as number, signal),
+    {
+      enabled: Boolean(selectedId) && selectedEventId !== null,
+      key: `${sessionKey}:${selectedEventId ?? "none"}`,
+    },
   );
 
-  const changeSeverity = (next: Severity) => {
-    setSeverity(next);
-    setOffset(0);
+  useEffect(() => {
+    setSelectedEventId(null);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (selectedEventId === null) return;
+    if (typeof window === "undefined" || window.innerWidth > 1000) return;
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById("anomaly-investigation")
+        ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+  }, [selectedEventId]);
+
+  const allEvents = events.data?.rows ?? [];
+  const selectedEvent =
+    selectedEventId === null
+      ? null
+      : (allEvents.find((event) => event.event_id === selectedEventId) ?? null);
+  const loadedSpan = eventSpan(allEvents);
+  const firstFrame =
+    selected?.frame_range.first ?? loadedSpan.first ?? summary.data?.temporal.first_frame ?? 0;
+  const lastFrame =
+    selected?.frame_range.last ?? loadedSpan.last ?? summary.data?.temporal.last_frame ?? 0;
+  const fps = selected?.processing.fps ?? null;
+  const data = events.data;
+
+  const chooseEvent = (event: AnomalyItem) => {
+    setSelectedEventId(event.event_id);
   };
 
   return (
     <>
       <PageHeader
-        eyebrow="Fusion evidence"
-        title="Anomaly Center"
-        lede="Severity bands and evidence channels exactly as the engine is configured. Events populate here from a persisted session's fused scoring."
+        eyebrow="Fusion intelligence"
+        title="Anomaly Intelligence Center"
+        lede="A persisted event ledger, severity timeline and evidence investigation built from the engine's fused scores. Missing evidence stays missing; no event, timestamp or explanation is synthesized."
         aside={
-          <span className="pill pill--accent">
-            <AnomalyIcon width={11} height={11} />
-            {anomaly ? `Bands ${anomaly.threshold_suspicious.toFixed(2)} / ${anomaly.threshold_irregular.toFixed(2)}` : "Loading bands"}
-          </span>
+          selected ? (
+            <span className="pill pill--accent mono">
+              <AnomalyIcon width={11} height={11} />
+              {selected.session}
+            </span>
+          ) : (
+            <span className="pill pill--mono-dim">No session</span>
+          )
         }
       />
 
-      <div className="layout-split">
-        <Panel
-          title="Severity ladder"
-          sub="Fused score → verdict"
-          actions={<span className="tag">live config</span>}
-        >
-          {config.status === "error" ? (
-            <ErrorState error={config.error} onRetry={config.reload} />
-          ) : config.status === "loading" && !config.data ? (
-            <LoadingRows rows={5} label="Loading severity bands" />
-          ) : anomaly ? (
-            <div className="stack gap-18">
-              <div className="ladder">
-                <div className="ladder__track" aria-hidden="true">
-                  <span
-                    className="ladder__zone ladder__zone--normal"
-                    style={{ width: `${anomaly.threshold_suspicious * 100}%` }}
-                  />
-                  <span
-                    className="ladder__zone ladder__zone--suspicious"
-                    style={{
-                      width: `${(anomaly.threshold_irregular - anomaly.threshold_suspicious) * 100}%`,
-                    }}
-                  />
-                  <span
-                    className="ladder__zone ladder__zone--irregular"
-                    style={{ width: `${(1 - anomaly.threshold_irregular) * 100}%` }}
-                  />
-                  <span
-                    className="ladder__tick"
-                    style={{ left: `${anomaly.threshold_suspicious * 100}%` }}
-                  />
-                  <span
-                    className="ladder__tick"
-                    style={{ left: `${anomaly.threshold_irregular * 100}%` }}
-                  />
-                </div>
-                <div className="ladder__scale">
-                  {[
-                    { at: 0, text: "0.00", edge: "start" },
-                    { at: anomaly.threshold_suspicious, text: anomaly.threshold_suspicious.toFixed(2) },
-                    { at: anomaly.threshold_irregular, text: anomaly.threshold_irregular.toFixed(2) },
-                    { at: 1, text: "1.00", edge: "end" },
-                  ].map((mark) => (
-                    <span
-                      key={mark.text + mark.at}
-                      className={`ladder__scale-mark ${mark.edge ? `ladder__scale-mark--${mark.edge}` : ""}`.trim()}
-                      style={{ left: `${mark.at * 100}%` }}
-                    >
-                      {mark.text}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rows rows--tight">
-                <BandRow
-                  tone="ok"
-                  name="Normal"
-                  range={`score < ${anomaly.threshold_suspicious.toFixed(2)}`}
-                  note="no elevated evidence"
-                />
-                <BandRow
-                  tone="warn"
-                  name="Suspicious"
-                  range={`${anomaly.threshold_suspicious.toFixed(2)} – ${anomaly.threshold_irregular.toFixed(2)}`}
-                  note="partial rule / model / scene agreement"
-                />
-                <BandRow
-                  tone="bad"
-                  name="Irregular"
-                  range={`score ≥ ${anomaly.threshold_irregular.toFixed(2)}`}
-                  note="strong multi-channel evidence"
-                />
-              </div>
-
-              <div className="cluster">
-                <span className="tag">contamination {anomaly.contamination}</span>
-                <span className="tag">window {anomaly.per_object_window}</span>
-                <span className="tag">
-                  clusters {anomaly.scene_cluster_k_min}–{anomaly.scene_cluster_k_max}
-                </span>
-              </div>
-            </div>
-          ) : null}
+      {!selectedId ? (
+        <Panel>
+          <EmptyState
+            title="No session selected"
+            body="Anomaly events are persisted per session. Pick a recorded session in the top bar to read its ledger, timeline and evidence."
+            glyph={<AnomalyIcon width={17} height={17} />}
+          />
         </Panel>
+      ) : (
+        <>
+          <AnomalySummary
+            sessionId={selectedId}
+            summary={summary}
+            tracks={tracks}
+            config={config}
+            events={allEvents}
+            eventsReady={events.status === "ready" || events.status === "error"}
+            eventsStatus={events.status}
+            eventsError={events.error}
+            reloadEvents={events.reload}
+            eventsTotal={data?.total ?? 0}
+            truncated={data?.truncated ?? false}
+          />
 
-        <div className="stack gap-14">
-          <Panel title="Evidence channels" sub="Fusion weights">
-            {weights ? (
-              <div className="weights">
-                <WeightBar name="Rule engine" value={weights.rule} />
-                <WeightBar name="Isolation Forest" value={weights.ml} />
-                <WeightBar name="Scene deviation" value={weights.scene} />
-              </div>
-            ) : (
-              <LoadingRows rows={3} label="Loading weights" />
-            )}
-            <p className="note-line">
-              <span className="dot dot--warn" />
-              Weights are read from the running engine; they are not cached in the browser.
-            </p>
-          </Panel>
+          <section className="section">
+            <AnomalyTimeline
+              events={allEvents}
+              firstFrame={firstFrame}
+              lastFrame={lastFrame}
+              firstTs={selected?.timestamps.first_ts ?? null}
+              lastTs={selected?.timestamps.last_ts ?? null}
+              fps={fps}
+              selectedEventId={selectedEventId}
+              totalEvents={data?.total ?? 0}
+              truncated={data?.truncated ?? false}
+              status={events.status}
+              error={events.error}
+              reload={events.reload}
+              onSelect={chooseEvent}
+            />
+          </section>
 
-          <Panel title="Rule thresholds" sub="Rule channel">
-            {anomaly ? (
-              <div className="rows rows--tight">
-                <div className="row">
-                  <span className="row__key">Speed pctl</span>
-                  <span className="row__value">
-                    {anomaly.rule.speed_pctl_slow} → {anomaly.rule.speed_pctl_fast}
-                  </span>
-                </div>
-                <div className="row">
-                  <span className="row__key">Max z-score</span>
-                  <span className="row__value">{anomaly.rule.max_z}</span>
-                </div>
-                <div className="row">
-                  <span className="row__key">Loiter</span>
-                  <span className="row__value">{anomaly.rule.loiter_seconds}s</span>
-                </div>
-                <div className="row">
-                  <span className="row__key">Direction dev</span>
-                  <span className="row__value">{anomaly.rule.direction_dev_deg}°</span>
-                </div>
-              </div>
-            ) : (
-              <LoadingRows rows={4} label="Loading rule thresholds" />
-            )}
-          </Panel>
-        </div>
-      </div>
-
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Event ledger</span>
-          <span className="section__meta">
-            {selected
-              ? `${selected.session} · ${formatNumber(selected.counts.anomalies)} non-normal observations`
-              : "Suspicious · Irregular"}
-          </span>
-        </div>
-        <Panel
-          bodyClassName="panel__body--flush"
-          actions={
-            selected ? (
-              <div className="seg">
-                {(["all", "Suspicious", "Irregular"] as Severity[]).map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className={`seg__item ${severity === option ? "is-active" : ""}`.trim()}
-                    onClick={() => changeSeverity(option)}
-                    aria-pressed={severity === option}
-                  >
-                    {option === "all" ? "All" : option}
-                  </button>
-                ))}
-              </div>
-            ) : undefined
-          }
-        >
-          {!selectedId ? (
-            <div className="panel__pad">
-              <EmptyState
-                title="No session selected"
-                body="Fused events are served per session. Pick a persisted session in the top bar and its ledger loads here."
-                glyph={<AnomalyIcon width={17} height={17} />}
+          <section className="section">
+            <div className="section__head">
+              <span className="section__title">Event workbench</span>
+              <span className="section__meta">
+                {data
+                  ? `${formatNumber(data.rows.length)} loaded · ${formatNumber(data.total)} reported`
+                  : events.status === "error"
+                    ? "Event request failed"
+                    : "Reading persisted events"}
+              </span>
+            </div>
+            <div className="anomaly-workbench">
+              <AnomalyLedger
+                sessionId={selectedId}
+                events={allEvents}
+                status={events.status}
+                error={events.error}
+                reload={events.reload}
+                selectedEventId={selectedEventId}
+                onSelect={chooseEvent}
+                totalEvents={data?.total ?? 0}
+                truncated={data?.truncated ?? false}
+              />
+              <AnomalyDetailPanel
+                sessionId={selectedId}
+                selected={selectedEvent}
+                detail={detail}
               />
             </div>
-          ) : events.status === "error" ? (
-            <div className="panel__pad">
-              <ErrorState error={events.error} onRetry={events.reload} compact />
-            </div>
-          ) : events.status === "loading" && !events.data ? (
-            <div className="panel__pad">
-              <LoadingRows rows={6} label="Loading events" />
-            </div>
-          ) : events.data && events.data.anomalies.length > 0 ? (
-            <>
-              <div className="table-wrap">
-                <table className="table table--events">
-                  <thead>
-                    <tr>
-                      <th>Fused</th>
-                      <th>Level</th>
-                      <th>Frame</th>
-                      <th>Track</th>
-                      <th>Rule</th>
-                      <th>ML</th>
-                      <th>Scene</th>
-                      <th>Evidence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {events.data.anomalies.map((event) => (
-                      <tr key={event.event_id}>
-                        <td>
-                          <Score value={event.scores.fused} />
-                        </td>
-                        <td>
-                          <LevelBadge level={event.level} />
-                        </td>
-                        <td className="mono">{event.frame}</td>
-                        <td className="mono">T{String(event.track_id).padStart(2, "0")}</td>
-                        <td>
-                          <Score value={event.scores.rule} />
-                        </td>
-                        <td>
-                          <Score value={event.scores.ml} />
-                        </td>
-                        <td>
-                          <Score value={event.scores.scene} />
-                        </td>
-                        <td className="table__summary" title={event.summary}>
-                          {truncateMiddle(event.summary, 96)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="panel__pad panel__pad--tight">
-                <Pager
-                  total={events.data.total}
-                  limit={EVENT_PAGE}
-                  offset={offset}
-                  onChange={setOffset}
-                  label="events"
-                />
-              </div>
-            </>
-          ) : (
-            <div className="panel__pad">
-              <EmptyState
-                title={severity === "all" ? "No elevated events in this run" : `No ${severity.toLowerCase()} events`}
-                body="Every observation in the selected session scored below the suspicious band. The engine reports this honestly rather than padding the ledger."
-                glyph={<AnomalyIcon width={17} height={17} />}
+          </section>
+
+          <section className="section" id="anomaly-frame-evidence">
+            <Panel
+              bodyClassName="panel__body--flush"
+              title="Frame evidence"
+              sub="Retained previews for the selected event"
+              actions={
+                media.data ? (
+                  <span className="tag">{formatNumber(media.data.preview_count)} previews</span>
+                ) : undefined
+              }
+              foot={
+                <>
+                  <span className="dot dot--warn" />
+                  {media.data
+                    ? media.data.annotated_video.reason
+                    : "No annotated video is produced by the engine; only retained preview frames exist."}
+                </>
+              }
+            >
+              <FrameInvestigator
+                sessionId={selectedId}
+                media={media}
+                events={allEvents}
+                eventsReady={events.status === "ready" || events.status === "error"}
+                eventsError={events.status === "error"}
+                eventTotal={data?.total ?? 0}
+                focusFrame={selectedEvent?.frame ?? null}
               />
-            </div>
-          )}
-        </Panel>
-      </section>
+            </Panel>
+          </section>
+        </>
+      )}
     </>
-  );
-}
-
-function BandRow({
-  tone,
-  name,
-  range,
-  note,
-}: {
-  tone: "ok" | "warn" | "bad";
-  name: string;
-  range: string;
-  note: string;
-}) {
-  return (
-    <div className="row">
-      <span className={`band-dot band-dot--${tone}`} />
-      <span className="band-name">{name}</span>
-      <span className="band-range mono">{range}</span>
-      <span className="row__value row__value--dim">{note}</span>
-    </div>
-  );
-}
-
-function WeightBar({ name, value }: { name: string; value: number }) {
-  return (
-    <div className="weight">
-      <div className="weight__head">
-        <span className="weight__name">{name}</span>
-        <span className="weight__value mono">{value.toFixed(2)}</span>
-      </div>
-      <div className="weight__track">
-        <span className="weight__fill" style={{ width: `${Math.max(2, value * 100)}%` }} />
-      </div>
-    </div>
   );
 }

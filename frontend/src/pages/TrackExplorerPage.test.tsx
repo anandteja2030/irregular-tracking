@@ -251,9 +251,9 @@ function mockFetch(overrides: Partial<Record<string, Response>> = {}) {
   return fetchMock;
 }
 
-function renderExplorer() {
+function renderExplorer(path = `/tracks?session=${SESSION}`) {
   return render(
-    <MemoryRouter initialEntries={[`/tracks?session=${SESSION}`]}>
+    <MemoryRouter initialEntries={[path]}>
       <ApiHealthProvider>
         <AppRoutes />
       </ApiHealthProvider>
@@ -316,6 +316,19 @@ describe("track explorer", () => {
     expect(await screen.findByText("No tracked objects")).toBeTruthy();
     expect(screen.queryByText("Track index")).toBeNull();
     expect(screen.getByText(/no trajectories, observations or events/)).toBeTruthy();
+  });
+
+  it("honors an anomaly deep link to a track and frame", async () => {
+    mockFetch();
+    renderExplorer(`/tracks?session=${SESSION}&track=0&frame=18`);
+
+    await screen.findByRole("button", { name: /Track T00/ });
+    await screen.findByText("T00 · measured lifecycle and motion");
+    await waitFor(() => expect(screen.getAllByText("F00018").length).toBeGreaterThan(0));
+    expect(screen.getByRole("button", { name: /Track T00/ }).className).toContain(
+      "is-active",
+    );
+    expect(screen.queryByText(/not in this session's retained preview set/)).toBeNull();
   });
 
   it("jumps to a retained anomaly frame and is honest when it is not retained", async () => {

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../app/SessionProvider";
 import { api } from "../lib/api";
 import { useResource, type ResourceState } from "../hooks/useResource";
@@ -34,14 +34,26 @@ function timeOfDay(ts: string): string {
   return iso.slice(11, 19) || "—";
 }
 
+function integerParam(params: URLSearchParams, key: string): number | null {
+  const raw = params.get(key);
+  if (raw === null || raw.trim() === "") return null;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 export function TrackExplorerPage() {
   const { selected, selectedId } = useSession();
-  const [pickedTrack, setPickedTrack] = useState<number | null>(null);
+  const [searchParams] = useSearchParams();
+  // A link from the Anomaly Center can address one track and one frame.
+  const linkedTrack = useRef(integerParam(searchParams, "track"));
+  const linkedFrame = useRef(integerParam(searchParams, "frame"));
+  const targetTrack = useRef(linkedTrack.current);
+  const [pickedTrack, setPickedTrack] = useState<number | null>(linkedTrack.current);
   const [query, setQuery] = useState("");
   const [levelFilter, setLevelFilter] = useState<TrackLevelFilter>("all");
   const [sort, setSort] = useState<TrackSort>("anomalies");
   const [offset, setOffset] = useState(0);
-  const [focusFrame, setFocusFrame] = useState<number | null>(null);
+  const [focusFrame, setFocusFrame] = useState<number | null>(linkedFrame.current);
 
   const sessionKey = selectedId ?? "none";
   const params = trackListParams(levelFilter, sort);
@@ -117,17 +129,27 @@ export function TrackExplorerPage() {
   );
 
   useEffect(() => {
-    setPickedTrack(null);
+    setPickedTrack(targetTrack.current);
     setQuery("");
     setLevelFilter("all");
     setSort("anomalies");
     setOffset(0);
-    setFocusFrame(null);
+    setFocusFrame(linkedFrame.current);
   }, [selectedId]);
 
   useEffect(() => {
     setOffset(0);
-    setFocusFrame(null);
+    if (
+      linkedFrame.current !== null &&
+      targetTrack.current !== null &&
+      activeId === targetTrack.current
+    ) {
+      setFocusFrame(linkedFrame.current);
+      linkedFrame.current = null;
+      targetTrack.current = null;
+    } else {
+      setFocusFrame(null);
+    }
   }, [activeId]);
 
   useEffect(() => {
@@ -136,7 +158,20 @@ export function TrackExplorerPage() {
     }
   }, [observations.data, offset]);
 
-  const pickTrack = (trackId: number) => setPickedTrack(trackId);
+  useEffect(() => {
+    if (focusFrame === null) return;
+    const index = motion.data?.observations.findIndex((row) => row.frame === focusFrame) ?? -1;
+    if (index < 0) return;
+    const next = Math.floor(index / OBSERVATION_PAGE) * OBSERVATION_PAGE;
+    setOffset((current) => (current === next ? current : next));
+  }, [focusFrame, motion.data]);
+
+  const pickTrack = (trackId: number) => {
+    targetTrack.current = null;
+    linkedFrame.current = null;
+    setPickedTrack(trackId);
+    setFocusFrame(null);
+  };
 
   const inspectFrame = (frame: number, scroll = false) => {
     setFocusFrame(frame);
@@ -516,6 +551,7 @@ export function TrackExplorerPage() {
                       media={scopedMedia}
                       events={anomalies.data?.anomalies ?? null}
                       eventsReady={Boolean(anomalies.data) || anomalies.status === "error"}
+                      eventsError={anomalies.status === "error"}
                       eventTotal={anomalies.data?.total ?? 0}
                       focusFrame={focusFrame}
                     />

@@ -363,6 +363,28 @@ export interface AnomalyList {
   anomalies: AnomalyItem[];
 }
 
+export interface AnomalyTrackContext {
+  track_id: number;
+  color: string | null;
+  shape: string | null;
+  observations: number;
+  anomalies: number;
+  worst_level: Level;
+  first_frame: number | null;
+  last_frame: number | null;
+}
+
+export interface AnomalyDetail extends AnomalyItem {
+  track: AnomalyTrackContext | null;
+  frame_info: {
+    index: number;
+    ts_utc: string;
+    media_available: boolean;
+    frame_url: string | null;
+  };
+  notes: string[];
+}
+
 export interface StatSummary {
   samples: number;
   p10: number;

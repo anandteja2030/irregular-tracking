@@ -8,6 +8,7 @@
  * its own URL, headers or error handling.
  */
 import type {
+  AnomalyDetail,
   AnomalyList,
   ApiErrorEnvelope,
   EngineConfig,
@@ -317,7 +318,10 @@ export const api = {
     params: {
       severity?: string;
       track_id?: number;
+      event_type?: string;
       min_score?: number;
+      from_frame?: number;
+      to_frame?: number;
       sort?: string;
       limit?: number;
       offset?: number;
@@ -326,6 +330,12 @@ export const api = {
   ) =>
     request<AnomalyList>(
       `${sessionPath(sessionId)}/anomalies${queryString(params)}`,
+      { signal },
+    ),
+
+  anomalyDetail: (sessionId: string, eventId: number, signal?: AbortSignal) =>
+    request<AnomalyDetail>(
+      `${sessionPath(sessionId)}/anomalies/${eventId}`,
       { signal },
     ),
 

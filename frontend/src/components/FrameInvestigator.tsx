@@ -16,12 +16,11 @@ interface FrameInvestigatorProps {
   events: AnomalyItem[] | null;
   eventTotal: number;
   eventsReady: boolean;
+  eventsError?: boolean;
   /** Optional external request: jump to this source frame when a retained
    * preview exists, otherwise to the nearest retained one. */
   focusFrame?: number | null;
 }
-
-const EVENT_WINDOW = 200;
 
 /**
  * Retained preview frames only. The API retains a decimated set in memory for
@@ -32,6 +31,7 @@ export function FrameInvestigator({
   media,
   events,
   eventsReady,
+  eventsError = false,
   eventTotal,
   focusFrame,
 }: FrameInvestigatorProps) {
@@ -81,6 +81,7 @@ export function FrameInvestigator({
   const frameEvents = frame
     ? (events ?? []).filter((event) => event.frame === frame.frame)
     : [];
+  const loadedEvents = events?.length ?? 0;
 
   return (
     <div className="investigator">
@@ -216,6 +217,10 @@ export function FrameInvestigator({
           </div>
           {!frame || media.status !== "ready" ? (
             <p className="hint hint--flush">Frame events appear once a retained preview is selected.</p>
+          ) : eventsError ? (
+            <p className="hint hint--flush">
+              Frame event evidence is unavailable because the session's event request failed.
+            </p>
           ) : !eventsReady ? (
             <p className="hint hint--flush">Reading this session's events…</p>
           ) : frameEvents.length > 0 ? (
@@ -242,13 +247,13 @@ export function FrameInvestigator({
             <p className="hint hint--flush">
               {eventTotal === 0
                 ? "No elevated events were loaded for this view, so no frame carries event evidence."
-                : `No elevated event falls on this exact frame in the ${formatNumber(Math.min(eventTotal, EVENT_WINDOW))} loaded events.`}
+                : `No elevated event falls on this exact frame in the ${formatNumber(loadedEvents)} loaded events.`}
             </p>
           )}
-          {eventTotal > EVENT_WINDOW && (
+          {eventTotal > loadedEvents && (
             <p className="hint">
-              This view holds {formatNumber(eventTotal)} events; the frame lookup covers {EVENT_WINDOW} of
-              them.
+              This view holds {formatNumber(eventTotal)} events; the frame lookup covers{" "}
+              {formatNumber(loadedEvents)} of them.
             </p>
           )}
         </div>
