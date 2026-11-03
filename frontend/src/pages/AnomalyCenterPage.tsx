@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useSession } from "../app/SessionProvider";
 import { api } from "../lib/api";
 import { useResource } from "../hooks/useResource";
@@ -49,9 +50,20 @@ async function loadAllAnomalies(
   return { rows, total, truncated: rows.length < total };
 }
 
+function eventParam(value: string | null): number | null {
+  if (value === null || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function AnomalyCenterPage() {
   const { selected, selectedId } = useSession();
+  const [searchParams] = useSearchParams();
+  const linkedParam = searchParams.get("event");
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [linkedEventId, setLinkedEventId] = useState<number | null>(() =>
+    eventParam(linkedParam),
+  );
   const sessionKey = selectedId ?? "none";
 
   const summary = useResource(
@@ -84,6 +96,18 @@ export function AnomalyCenterPage() {
   useEffect(() => {
     setSelectedEventId(null);
   }, [selectedId]);
+
+  useEffect(() => {
+    setLinkedEventId(eventParam(linkedParam));
+  }, [linkedParam]);
+
+  useEffect(() => {
+    if (linkedEventId === null || !events.data) return;
+    if (events.data.rows.some((event) => event.event_id === linkedEventId)) {
+      setSelectedEventId(linkedEventId);
+    }
+    setLinkedEventId(null);
+  }, [linkedEventId, events.data]);
 
   useEffect(() => {
     if (selectedEventId === null) return;

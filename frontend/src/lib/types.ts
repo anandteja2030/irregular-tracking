@@ -389,12 +389,12 @@ export interface StatSummary {
   samples: number;
   p10: number;
   p50: number;
-  p90?: number;
+  p90?: number | null;
   mean: number;
-  std?: number;
-  min?: number;
-  max?: number;
-  moving_fraction?: number;
+  std?: number | null;
+  min?: number | null;
+  max?: number | null;
+  moving_fraction?: number | null;
   source?: string;
 }
 
@@ -407,24 +407,18 @@ export interface SceneResponse {
     samples: number | null;
     tracks: number | null;
     observed_seconds: number | null;
-    reason: string;
+    reason: string | null;
     [key: string]: unknown;
   };
-  speed_baseline: StatSummary;
-  directions: {
-    samples: number;
-    counts: Record<string, number> | null;
-    histogram: Record<string, number>;
-    dominant: string[];
-    source: string;
-  };
+  speed_baseline: StatSummary | null;
+  directions: DirectionProfile | null;
   deviations: {
     scene_score: {
       samples: number;
-      mean: number;
-      p50: number;
-      max: number;
-      p90?: number;
+      mean: number | null;
+      p50: number | null;
+      max: number | null;
+      p90?: number | null;
     };
     above_0_2: number;
     above_0_3: number;

@@ -252,9 +252,9 @@ function mockFetch(overrides: Partial<Record<string, Response>> = {}) {
   return fetchMock;
 }
 
-function renderCenter() {
+function renderCenter(path = `/anomalies?session=${SESSION}`) {
   return render(
-    <MemoryRouter initialEntries={[`/anomalies?session=${SESSION}`]}>
+    <MemoryRouter initialEntries={[path]}>
       <ApiHealthProvider>
         <AppRoutes />
       </ApiHealthProvider>
@@ -347,6 +347,15 @@ describe("anomaly intelligence center", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open investigation for event 23" }));
     await waitFor(() => expect(evidenceText()).toContain("no rule trigger was recorded"));
     expect(evidenceText()).toContain("No rule, ML note or scene note was recorded");
+  });
+
+  it("opens the event addressed by a scene deep link", async () => {
+    mockFetch();
+    renderCenter(`/anomalies?session=${SESSION}&event=24`);
+
+    expect(await screen.findByText("Rule-level evidence is missing for this session")).toBeTruthy();
+    const detail = document.querySelector(".anomaly-investigation");
+    expect(detail?.textContent).toContain("E24");
   });
 
   it("keeps the ledger error isolated and surfaces an API failure", async () => {
