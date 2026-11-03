@@ -536,17 +536,32 @@ export interface MediaResponse {
   notes: string[];
 }
 
+export interface EvaluationMetrics {
+  tp: number;
+  fp: number;
+  fn: number;
+  tn: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  fpr: number;
+  accuracy: number;
+  n_labeled: number;
+  /** Reserved for an API that exposes ranked scores. Current API omits it. */
+  roc_auc?: number | null;
+}
+
 export interface EvaluationResponse {
   session: string;
   available: boolean;
   computable: boolean;
-  metrics: Record<string, number | null> | null;
-  reason: string;
+  metrics: EvaluationMetrics | null;
+  reason: string | null;
   labeled_observations: number;
   total_observations: number;
   unlabeled_observations: number;
-  coverage: number;
-  label_counts: { Normal: number; Anomaly: number };
+  coverage: number | null;
+  label_counts: Record<string, number>;
   predicted_positive: number;
   positive_rule: string;
 }

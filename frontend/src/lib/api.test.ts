@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, downloadSessionExport } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -84,6 +84,65 @@ describe("job conflicts", () => {
       status: 409,
       code: "job_duplicate",
       detail: { job_id: "job_existing9" },
+    });
+  });
+});
+
+describe("session downloads", () => {
+  it("returns the blob, server filename and row count", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("frame\n0\n", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="run_events.csv"',
+          "X-Row-Count": "1",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = await downloadSessionExport("run 1/x", "events");
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "/api/v1/sessions/run%201%2Fx/export/csv?dataset=events",
+    );
+    expect(file.filename).toBe("run_events.csv");
+    expect(file.rowCount).toBe(1);
+    expect(file.contentType).toContain("text/csv");
+    expect(file.blob.size).toBeGreaterThan(0);
+  });
+
+  it("requests the downloadable markdown report and surfaces API failures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("# Report\n", {
+          status: 200,
+          headers: {
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Content-Disposition": "attachment; filename=run_report.md",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: { code: "internal", message: "Report generation failed." } },
+          500,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const file = await downloadSessionExport("run_1", "report");
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "/api/v1/sessions/run_1/report?download=true",
+    );
+    expect(file.filename).toBe("run_report.md");
+    expect(file.rowCount).toBeNull();
+
+    await expect(downloadSessionExport("run_1", "report")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 500,
+      message: "Report generation failed.",
     });
   });
 });

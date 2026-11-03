@@ -184,6 +184,89 @@ export function queryString(params: Record<string, QueryValue>): string {
 const sessionPath = (sessionId: string) =>
   `/sessions/${encodeURIComponent(sessionId)}`;
 
+export type SessionDownloadKind = "events" | "tracks" | "report";
+
+export interface SessionDownload {
+  blob: Blob;
+  filename: string;
+  rowCount: number | null;
+  contentType: string | null;
+}
+
+function downloadFilename(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback;
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      /* fall through to the plain filename */
+    }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  return plain?.trim() || fallback;
+}
+
+/** Fetch an existing export as a blob so the page can show loading, empty,
+ * success and failure states instead of navigating away through a bare link. */
+export async function downloadSessionExport(
+  sessionId: string,
+  kind: SessionDownloadKind,
+  signal?: AbortSignal,
+): Promise<SessionDownload> {
+  const base = sessionPath(sessionId);
+  const path =
+    kind === "report"
+      ? `${base}/report?download=true`
+      : `${base}/export/csv?dataset=${kind}`;
+  const budget = timeoutSignal(120_000);
+  const combined =
+    signal && typeof AbortSignal !== "undefined" && "any" in AbortSignal
+      ? AbortSignal.any([signal, budget])
+      : budget;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: { Accept: kind === "report" ? "text/markdown" : "text/csv" },
+      signal: combined,
+    });
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    throw new ApiError(
+      0,
+      "network_error",
+      "The export could not reach the analysis service.",
+      cause,
+    );
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    let payload: unknown = null;
+    if (text) {
+      try {
+        payload = JSON.parse(text) as unknown;
+      } catch {
+        payload = null;
+      }
+    }
+    throw errorFromPayload(response.status, payload, response.statusText);
+  }
+
+  const header = response.headers.get("x-row-count");
+  const parsed = header === null ? Number.NaN : Number.parseInt(header, 10);
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(
+      response.headers.get("content-disposition"),
+      kind === "report" ? `${sessionId}_report.md` : `${sessionId}_${kind}.csv`,
+    ),
+    rowCount: Number.isFinite(parsed) ? parsed : null,
+    contentType: response.headers.get("content-type"),
+  };
+}
+
 /**
  * Uploads go through XMLHttpRequest instead of fetch: only XHR reports
  * upload progress, and the bar must reflect bytes actually sent.
@@ -370,6 +453,7 @@ export const api = {
     }),
   evaluation: (sessionId: string, signal?: AbortSignal) =>
     request<EvaluationResponse>(`${sessionPath(sessionId)}/evaluation`, { signal }),
+  downloadExport: downloadSessionExport,
 };
 
 export function describeError(error: unknown): string {
