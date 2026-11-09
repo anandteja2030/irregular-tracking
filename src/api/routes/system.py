@@ -12,6 +12,8 @@ from fastapi import APIRouter, Request
 from config.config import load_config
 from src.api import API_VERSION
 from src.api.probe import VIDEO_EXTENSIONS
+from src.api.settings import settings as api_settings
+from src.api.uploads import ALLOWED_EXTENSIONS, ALLOWED_MIME_TYPES
 
 router = APIRouter(tags=["system"])
 
@@ -79,4 +81,22 @@ def system_status() -> dict:
                        "bytes": sum(p.stat().st_size for p in output_files)},
         },
         "runtime": {"executable": sys.executable, "pid": __import__("os").getpid()},
+        # Display-safe runtime limits. These are the same values enforced by
+        # the upload stream and job admission checks, not illustrative defaults.
+        "limits": {
+            "max_upload_bytes": api_settings.max_upload_bytes,
+            "upload_ttl_s": api_settings.upload_ttl_s,
+            "max_workers": api_settings.max_workers,
+            "max_frames_cap": api_settings.max_frames_cap,
+        },
+        "formats": {
+            "extensions": sorted(ALLOWED_EXTENSIONS),
+            "mime_types": sorted(ALLOWED_MIME_TYPES),
+        },
+        "configuration": {
+            "writable": True,
+            "persistence": "process_local",
+            "resets_on_restart": True,
+            "paths_read_only": True,
+        },
     }

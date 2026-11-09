@@ -24,7 +24,9 @@ def list_anomalies(
         session_id: str,
         severity: Literal["Suspicious", "Irregular"] | None = Query(
             default=None, description="Restrict to one fused level"),
-        track_id: int | None = Query(default=None, ge=1),
+        # Track ids are zero-based; track 0 is a real object and must be
+        # filterable like any other.
+        track_id: int | None = Query(default=None, ge=0),
         event_type: Literal["excessive_speed", "direction_against_flow",
                             "erratic_heading", "sudden_acceleration",
                             "zone_violation", "loitering", "ml", "scene"]

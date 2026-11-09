@@ -59,6 +59,13 @@ def test_system_reports_measured_environment(client: TestClient):
     assert body["storage"]["samples"]["videos"] == 3
     assert body["storage"]["samples"]["bytes"] > 0
     assert body["runtime"]["pid"] > 0
+    # Limits and formats are the values the API actually enforces.
+    assert body["limits"]["max_upload_bytes"] > 0
+    assert body["limits"]["max_frames_cap"] > 0
+    assert ".mp4" in body["formats"]["extensions"]
+    assert "video/mp4" in body["formats"]["mime_types"]
+    assert body["configuration"]["persistence"] == "process_local"
+    assert body["configuration"]["resets_on_restart"] is True
 
 
 # ------------------------------------------------------------------- config

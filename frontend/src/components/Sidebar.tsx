@@ -1,23 +1,8 @@
 import { NavLink } from "react-router-dom";
 import { NAV_ITEMS } from "../app/navigation";
 import { useApiHealth, apiPhase } from "../app/ApiHealthProvider";
+import { BrandMark } from "./BrandMark";
 import { DatabaseIcon } from "../components/icons";
-
-function BrandMark() {
-  return (
-    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 2.6 21 7.4v9.2L12 21.4 3 16.6V7.4z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-        opacity="0.75"
-      />
-      <path d="M12 7.1v9.8M7.6 9.6v4.8M16.4 9.6v4.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-    </svg>
-  );
-}
 
 export function Sidebar() {
   const health = useApiHealth();
@@ -33,9 +18,9 @@ export function Sidebar() {
         : "handshake in progress";
 
   return (
-    <aside className="rail">
+    <aside className="rail" aria-label="Workspace navigation">
       <div className="brand">
-        <span className="brand__mark">
+        <span className="brand__mark" aria-hidden="true">
           <BrandMark />
         </span>
         <span className="brand__text">
@@ -55,13 +40,18 @@ export function Sidebar() {
             to={item.path}
             end={item.path === "/"}
             className={({ isActive }) => `nav-item ${isActive ? "is-active" : ""}`}
+            // The rail folds to an icon column below 1180px, so the link carries
+            // its own name instead of relying on the label that CSS hides.
+            aria-label={item.label}
             title={item.label}
           >
-            <span className="nav-item__icon">
+            <span className="nav-item__icon" aria-hidden="true">
               <item.Icon width={17} height={17} />
             </span>
             <span className="nav-item__label">{item.label}</span>
-            <span className="nav-item__index">{item.index}</span>
+            <span className="nav-item__index" aria-hidden="true">
+              {item.index}
+            </span>
           </NavLink>
         ))}
       </nav>
@@ -72,6 +62,7 @@ export function Sidebar() {
             className={`dot ${
               phase === "online" ? "dot--live" : phase === "offline" ? "dot--down" : ""
             }`}
+            aria-hidden="true"
           />
           <span className="rail-status__text">
             <span className="rail-status__title">{statusLabel}</span>

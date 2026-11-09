@@ -49,11 +49,14 @@ function ShellLayout() {
   return (
     <SessionProvider>
     <div className="app">
+      <a className="skip-link" href="#workspace">
+        Skip to workspace
+      </a>
       <AmbientField />
       <Sidebar />
       <div className="shell">
         <TopBar onOpenPalette={() => setPaletteOpen(true)} />
-        <main className="workspace" id="workspace">
+        <main className="workspace" id="workspace" tabIndex={-1}>
           <div className="workspace__inner" key={pathname}>
             <ErrorBoundary>
               <Outlet />

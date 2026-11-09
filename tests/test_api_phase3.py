@@ -504,6 +504,11 @@ def test_anomaly_filters_and_detail(client, seeded):
     by_track = client.get(
         f"/api/v1/sessions/{ALPHA}/anomalies?track_id=2").json()
     assert by_track["total"] == 0
+    # Track ids start at zero, so filtering by track 0 must be accepted.
+    zero_track = client.get(
+        f"/api/v1/sessions/{ALPHA}/anomalies?track_id=0")
+    assert zero_track.status_code == 200
+    assert zero_track.json()["total"] == 0
     by_score = client.get(
         f"/api/v1/sessions/{ALPHA}/anomalies?min_score=0.6").json()
     assert by_score["total"] == 2

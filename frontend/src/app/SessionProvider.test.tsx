@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { AppRoutes } from "../App";
 import { ApiHealthProvider } from "./ApiHealthProvider";
+import { SessionProvider, useSession } from "./SessionProvider";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -40,7 +41,53 @@ function session(sessionId: string, label: string) {
   };
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.search}</output>;
+}
+
+function SelectionHarness() {
+  const { select, reload, selectedId } = useSession();
+  return (
+    <>
+      <button type="button" onClick={() => select("run_b")}>
+        Select run B
+      </button>
+      <button type="button" onClick={reload}>
+        Reload sessions
+      </button>
+      <output data-testid="selected">{selectedId ?? "none"}</output>
+      <LocationProbe />
+    </>
+  );
+}
+
+const SESSIONS = [session("run_a", "sample: a.mp4"), session("run_b", "upload: b.mp4")];
+
+function mockSessions() {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/sessions?")) {
+      return jsonResponse({
+        total: 2,
+        count: 2,
+        limit: 100,
+        offset: 0,
+        sessions: SESSIONS,
+      });
+    }
+    if (url.includes("/tracks")) {
+      return jsonResponse({ total: 0, count: 0, limit: 200, offset: 0, tracks: [] });
+    }
+    return jsonResponse({ error: { code: "http_404", message: "Not Found" } }, 404);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
 describe("session selection", () => {
+  beforeEach(() => window.sessionStorage.clear());
+
   it("lists persisted runs and refetches the workspace for the chosen one", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -78,6 +125,91 @@ describe("session selection", () => {
       const urls = fetchMock.mock.calls.map((call) => String(call[0]));
       expect(urls.some((url) => url.startsWith("/api/v1/sessions/run_b/tracks"))).toBe(true);
     });
+  });
+
+  it("drops track, event and frame parameters when the session changes", async () => {
+    mockSessions();
+    render(
+      <MemoryRouter
+        initialEntries={["/tracks?session=run_a&track=3&event=99&frame=18"]}
+      >
+        <ApiHealthProvider>
+          <AppRoutes />
+          <LocationProbe />
+        </ApiHealthProvider>
+      </MemoryRouter>,
+    );
+
+    const select = (await screen.findByLabelText("Active analysis session")) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(2));
+    fireEvent.change(select, { target: { value: "run_b" } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("?session=run_b"),
+    );
+  });
+
+  it("keeps a just-completed selection while the session list catches up", async () => {
+    const sessions = [session("run_a", "sample: a.mp4")];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/sessions?")) {
+        return jsonResponse({
+          total: sessions.length,
+          count: sessions.length,
+          limit: 100,
+          offset: 0,
+          sessions,
+        });
+      }
+      if (url.includes("/tracks")) {
+        return jsonResponse({ total: 0, count: 0, limit: 200, offset: 0, tracks: [] });
+      }
+      return jsonResponse({ error: { code: "http_404", message: "Not Found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={["/tracks?session=run_a"]}>
+        <SessionProvider>
+          <SelectionHarness />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("button", { name: "Select run B" });
+    fireEvent.click(screen.getByRole("button", { name: "Select run B" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("?session=run_b"),
+    );
+
+    sessions.push(session("run_b", "upload: b.mp4"));
+    fireEvent.click(screen.getByRole("button", { name: "Reload sessions" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected").textContent).toBe("run_b"),
+    );
+    expect(screen.getByTestId("location").textContent).toBe("?session=run_b");
+  });
+
+  it("repairs an unknown session link to the selected fallback", async () => {
+    mockSessions();
+    render(
+      <MemoryRouter
+        initialEntries={["/tracks?session=missing&track=3&event=99&frame=18"]}
+      >
+        <ApiHealthProvider>
+          <AppRoutes />
+          <LocationProbe />
+        </ApiHealthProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("?session=run_a"),
+    );
+    expect(
+      (screen.getByLabelText("Active analysis session") as HTMLSelectElement).value,
+    ).toBe("run_a");
   });
 
   it("keeps the empty-state copy when the store has no runs", async () => {

@@ -18,6 +18,25 @@ export interface StorageEntry {
   files?: number;
 }
 
+export interface SystemLimits {
+  max_upload_bytes: number;
+  upload_ttl_s: number;
+  max_workers: number;
+  max_frames_cap: number;
+}
+
+export interface SystemFormats {
+  extensions: string[];
+  mime_types: string[];
+}
+
+export interface SystemConfiguration {
+  writable: boolean;
+  persistence: "process_local" | string;
+  resets_on_restart: boolean;
+  paths_read_only: boolean;
+}
+
 export interface SystemStatus {
   version: string;
   python: string;
@@ -33,6 +52,10 @@ export interface SystemStatus {
     executable: string;
     pid: number;
   };
+  /** Present on current API builds; absent values are not invented. */
+  limits?: SystemLimits;
+  formats?: SystemFormats;
+  configuration?: SystemConfiguration;
 }
 
 export interface SourceEntry {
@@ -127,6 +150,16 @@ export interface EngineConfig {
     read_only: boolean;
   };
   [section: string]: unknown;
+}
+
+export interface ConfigUpdateResponse {
+  config: EngineConfig;
+  applied: string[];
+  changed: boolean;
+}
+
+export interface ConfigResetResponse extends ConfigUpdateResponse {
+  reset_to_defaults: true;
 }
 
 export interface ApiErrorEnvelope {
@@ -294,6 +327,28 @@ export interface TrajectoryResponse {
   reason: string | null;
 }
 
+export interface TrackFrameItem {
+  frame: number;
+  ts_utc: string | null;
+  level: Level | null;
+  fused_score: number | null;
+  speed_px_s: number | null;
+  preview_available: boolean;
+  frame_url: string | null;
+}
+
+export interface TrackFramesResponse {
+  session: string;
+  track_id: number;
+  total: number;
+  count: number;
+  limit: number;
+  offset: number;
+  media_available: boolean;
+  reason: string | null;
+  frames: TrackFrameItem[];
+}
+
 export interface ObservationItem {
   event_id: number;
   session: string;
@@ -311,6 +366,26 @@ export interface ObservationItem {
   summary: string;
 }
 
+export interface RuleEvidence {
+  rule: string;
+  severity?: number | null;
+  description?: string | null;
+  [key: string]: unknown;
+}
+
+export interface AnomalyItem extends ObservationItem {
+  evidence: {
+    available: boolean;
+    source: string;
+    rules: RuleEvidence[];
+    ml_note: string | null;
+    scene_note: string | null;
+    zone: string | null;
+    zone_dwell_s: number | null;
+    appearance: { color: string | null; shape: string | null } | null;
+  };
+}
+
 export interface AnomalyList {
   total: number;
   count: number;
@@ -318,19 +393,41 @@ export interface AnomalyList {
   offset: number;
   severity: Level | null;
   event_type: string | null;
-  anomalies: ObservationItem[];
+  anomalies: AnomalyItem[];
+}
+
+export interface AnomalyTrackContext {
+  track_id: number;
+  color: string | null;
+  shape: string | null;
+  observations: number;
+  anomalies: number;
+  worst_level: Level;
+  first_frame: number | null;
+  last_frame: number | null;
+}
+
+export interface AnomalyDetail extends AnomalyItem {
+  track: AnomalyTrackContext | null;
+  frame_info: {
+    index: number;
+    ts_utc: string;
+    media_available: boolean;
+    frame_url: string | null;
+  };
+  notes: string[];
 }
 
 export interface StatSummary {
   samples: number;
   p10: number;
   p50: number;
-  p90?: number;
+  p90?: number | null;
   mean: number;
-  std?: number;
-  min?: number;
-  max?: number;
-  moving_fraction?: number;
+  std?: number | null;
+  min?: number | null;
+  max?: number | null;
+  moving_fraction?: number | null;
   source?: string;
 }
 
@@ -343,24 +440,18 @@ export interface SceneResponse {
     samples: number | null;
     tracks: number | null;
     observed_seconds: number | null;
-    reason: string;
+    reason: string | null;
     [key: string]: unknown;
   };
-  speed_baseline: StatSummary;
-  directions: {
-    samples: number;
-    counts: Record<string, number> | null;
-    histogram: Record<string, number>;
-    dominant: string[];
-    source: string;
-  };
+  speed_baseline: StatSummary | null;
+  directions: DirectionProfile | null;
   deviations: {
     scene_score: {
       samples: number;
-      mean: number;
-      p50: number;
-      max: number;
-      p90?: number;
+      mean: number | null;
+      p50: number | null;
+      max: number | null;
+      p90?: number | null;
     };
     above_0_2: number;
     above_0_3: number;
@@ -370,17 +461,140 @@ export interface SceneResponse {
   notes: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * Video Studio: uploads, analysis jobs and preview media.
+ * ------------------------------------------------------------------ */
+
+export interface VideoProbe {
+  valid: boolean;
+  error?: string | null;
+  fps: number | null;
+  frames: number | null;
+  width: number | null;
+  height: number | null;
+  duration_s: number | null;
+}
+
+export interface UploadRecord {
+  upload_id: string;
+  filename: string;
+  bytes: number;
+  content_type: string | null;
+  created_ts: string;
+  video: VideoProbe;
+}
+
+export type JobState =
+  | "queued"
+  | "running"
+  | "cancellation_requested"
+  | "cancelled"
+  | "completed"
+  | "failed";
+
+export interface JobResult {
+  frames_processed: number;
+  frame_width: number;
+  frame_height: number;
+  fps: number;
+  tracks: number;
+  observations: number;
+  levels: LevelCounts;
+  wall_s: number;
+}
+
+export interface JobSnapshot {
+  job_id: string;
+  session_id: string;
+  state: JobState;
+  stage: string;
+  source: {
+    kind: "sample" | "upload";
+    ref: string;
+    label: string;
+    max_frames: number | null;
+  };
+  progress: {
+    processed: number;
+    total: number | null;
+    percent: number | null;
+    measured: boolean;
+  };
+  timings: {
+    created_ts: string;
+    started_ts: string | null;
+    ended_ts: string | null;
+    elapsed_s: number | null;
+  };
+  error: { code: string; message: string } | null;
+  result: JobResult | null;
+}
+
+export interface JobList {
+  total: number;
+  count: number;
+  jobs: JobSnapshot[];
+}
+
+export interface SessionArtifacts {
+  retained: boolean;
+  trajectories: boolean;
+  structured_evidence: boolean;
+  scene_calibration: boolean;
+  preview_frames: number;
+}
+
+export interface SessionDetail extends SessionItem {
+  artifacts: SessionArtifacts;
+  media: { preview_frames: number; available: boolean; preview_stride: number | null };
+  labels: { labels: number; evaluation_url: string };
+  limitations: string[];
+}
+
+export interface PreviewFrameInfo {
+  frame: number;
+  ts_s: number;
+  annotated_url: string;
+  original_url: string;
+}
+
+export interface MediaResponse {
+  session: string;
+  available: boolean;
+  preview_stride: number | null;
+  preview_count: number;
+  source_resolution: { width: number; height: number } | null;
+  frames: PreviewFrameInfo[];
+  annotated_video: { available: boolean; reason: string };
+  notes: string[];
+}
+
+export interface EvaluationMetrics {
+  tp: number;
+  fp: number;
+  fn: number;
+  tn: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  fpr: number;
+  accuracy: number;
+  n_labeled: number;
+  /** Reserved for an API that exposes ranked scores. Current API omits it. */
+  roc_auc?: number | null;
+}
+
 export interface EvaluationResponse {
   session: string;
   available: boolean;
   computable: boolean;
-  metrics: Record<string, number | null> | null;
-  reason: string;
+  metrics: EvaluationMetrics | null;
+  reason: string | null;
   labeled_observations: number;
   total_observations: number;
   unlabeled_observations: number;
-  coverage: number;
-  label_counts: { Normal: number; Anomaly: number };
+  coverage: number | null;
+  label_counts: Record<string, number>;
   predicted_positive: number;
   positive_rule: string;
 }
