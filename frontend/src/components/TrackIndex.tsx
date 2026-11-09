@@ -10,7 +10,7 @@ import {
 } from "../lib/tracks";
 import { formatDuration, formatNumber } from "../lib/format";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
-import { LevelMeter } from "./SessionBits";
+import { LevelBadge, LevelMeter } from "./SessionBits";
 import { SearchIcon, TrackIcon } from "./icons";
 
 interface TrackIndexProps {
@@ -37,11 +37,15 @@ function TrackRow({
   return (
     <button
       type="button"
-      className={`track-row ${active ? "is-active" : ""}`.trim()}
+      className={`track-row track-row--${track.observed.worst_level.toLowerCase()} ${
+        active ? "is-active" : ""
+      }`.trim()}
       onClick={onPick}
       aria-pressed={active}
+      aria-current={active ? "true" : undefined}
       aria-label={`Track ${formatTrackId(track.track_id)}, ${track.observed.observations} observations, ${track.observed.anomalies} elevated events, worst ${track.observed.worst_level}`}
     >
+      <span className="track-row__rail" aria-hidden="true" />
       <span className="track-row__id mono">{formatTrackId(track.track_id)}</span>
       <span className="track-row__body">
         <span className="track-row__line">
@@ -55,10 +59,11 @@ function TrackRow({
         </span>
         <LevelMeter levels={track.observed.levels} />
         <span className="track-row__meta mono">
-          {track.observed.worst_level} · {formatDuration(track.observed.duration_s)}
-          {track.motion.max_speed_px_s !== null
-            ? ` · ${track.motion.max_speed_px_s.toFixed(0)} px/s max`
-            : ""}
+          <LevelBadge level={track.observed.worst_level} />
+          <span>{formatDuration(track.observed.duration_s)}</span>
+          {track.motion.max_speed_px_s !== null ? (
+            <span>{track.motion.max_speed_px_s.toFixed(0)} px/s max</span>
+          ) : null}
         </span>
       </span>
     </button>
@@ -93,6 +98,16 @@ export function TrackIndex({
             placeholder="ID, colour, heading"
             aria-label="Search tracks"
           />
+          {query && (
+            <button
+              type="button"
+              className="track-search__clear"
+              onClick={() => onQuery("")}
+              aria-label="Clear track search"
+            >
+              ×
+            </button>
+          )}
         </label>
         <div className="track-tools__row">
           <label className="track-filter">

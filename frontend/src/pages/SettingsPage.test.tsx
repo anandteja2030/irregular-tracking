@@ -285,4 +285,74 @@ describe("system settings", () => {
     expect(document.querySelector(".settings-layout")).toBeTruthy();
     expect(document.querySelector(".settings-savebar")).toBeTruthy();
   });
+
+  it("reports draft state, field errors and the live fusion weight sum", async () => {
+    const { fetchMock } = baseFetch();
+    renderSettings(fetchMock);
+
+    const maxAge = (await screen.findByLabelText("Max age")) as HTMLInputElement;
+    expect(screen.getByText("In sync with process")).toBeTruthy();
+    expect(document.querySelector(".settings-savebar__signal")?.getAttribute("data-dirty")).toBe(
+      "false",
+    );
+
+    fireEvent.change(maxAge, { target: { value: "45" } });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(document.querySelector(".settings-savebar__signal")?.getAttribute("data-dirty")).toBe(
+      "true",
+    );
+
+    fireEvent.change(maxAge, { target: { value: "-1" } });
+    expect(screen.getByText("Invalid changes")).toBeTruthy();
+    expect(screen.getByText("1 field error")).toBeTruthy();
+    expect(screen.getByText("1 error")).toBeTruthy();
+    expect(maxAge.getAttribute("aria-describedby")).toBe("settings-max-age-error");
+    expect(document.querySelector(".settings-savebar__signal")?.getAttribute("data-invalid")).toBe(
+      "true",
+    );
+
+    const rule = (await screen.findByLabelText("Rule")) as HTMLInputElement;
+    expect(screen.getByText("Σ 1.000")).toBeTruthy();
+    fireEvent.change(rule, { target: { value: "0.6" } });
+    expect(screen.getByText("Σ 1.100")).toBeTruthy();
+    expect(document.querySelector(".settings-sum")?.getAttribute("data-ok")).toBe("false");
+    expect(screen.getByText(/Fusion weights must sum to 1.0 \(currently 1.100\)/)).toBeTruthy();
+  });
+
+  it("presents measured limits, formats and storage as tiles without inventing values", async () => {
+    const { fetchMock } = baseFetch();
+    renderSettings(fetchMock);
+
+    await screen.findByDisplayValue("640");
+
+    const limitCards = document.querySelectorAll(".settings-limits .metric-card");
+    expect(limitCards).toHaveLength(4);
+    expect(screen.getByText("16.0 MB")).toBeTruthy();
+    expect(screen.getByText("24h 00m")).toBeTruthy();
+    expect(screen.getByText("video/mp4 · video/quicktime")).toBeTruthy();
+
+    const storageCards = document.querySelectorAll(".settings-storage .metric-card");
+    expect(storageCards).toHaveLength(3);
+    expect(screen.getByText("4.00 KB")).toBeTruthy();
+    expect(screen.getByText("2.00 KB")).toBeTruthy();
+    expect(screen.getByText("8.00 KB")).toBeTruthy();
+    expect(screen.getByText("process local · resets on restart")).toBeTruthy();
+  });
+
+  it("lets a pending reset be cancelled without touching the API", async () => {
+    const { fetchMock } = baseFetch();
+    renderSettings(fetchMock);
+    await screen.findByDisplayValue("640");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset defaults" }));
+    expect(screen.getByText("Reset every section to shipped defaults?")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Reset every section to shipped defaults?")).toBeNull();
+    const resetCalls = (fetchMock.mock.calls as [RequestInfo | URL, RequestInit?][]).filter(
+      ([input]) => String(input).endsWith("/config/reset"),
+    );
+    expect(resetCalls).toHaveLength(0);
+    expect(screen.queryByText("Defaults restored")).toBeNull();
+  });
 });

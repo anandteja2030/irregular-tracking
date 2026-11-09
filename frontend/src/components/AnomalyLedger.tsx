@@ -239,7 +239,9 @@ export function AnomalyLedger({
                   return (
                     <tr
                       key={event.event_id}
-                      className={`is-clickable ${active ? "is-active" : ""}`.trim()}
+                      className={`is-clickable level-row--${event.level.toLowerCase()} ${
+                        active ? "is-active" : ""
+                      }`.trim()}
                       tabIndex={0}
                       aria-selected={active}
                       onClick={() => onSelect(event)}

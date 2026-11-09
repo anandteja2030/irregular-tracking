@@ -16,7 +16,16 @@ import { Panel } from "./Panel";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { ArrowRightIcon, ImageIcon, SceneIcon } from "./icons";
 
-const TRACK_COLORS = ["#7b86ff", "#4fe3ff", "#46dda6", "#ffc46b", "#ff6485", "#c084fc"];
+/** Chart accents come from the shared --chart-* tokens; the class only binds
+ * one token to a track, so no colour is hard-coded here. */
+const TRACK_ACCENTS = [
+  "scene-accent--1",
+  "scene-accent--2",
+  "scene-accent--3",
+  "scene-accent--4",
+  "scene-accent--5",
+  "scene-accent--6",
+];
 
 interface SceneSpatialProps {
   sessionId: string;
@@ -63,14 +72,18 @@ function DensityMap({
     () => densityGrid(flattened.points, width, height),
     [flattened.points, width, height],
   );
-  const colorByTrack = new Map(
-    drawable.map((track, index) => [track.trackId, TRACK_COLORS[index % TRACK_COLORS.length]]),
+  const accentByTrack = new Map(
+    drawable.map((track, index) => [track.trackId, TRACK_ACCENTS[index % TRACK_ACCENTS.length]]),
   );
   const peak = density.peak;
 
   return (
     <div className="scene-map">
       <div className="scene-map__stage">
+        <span className="scene-map__reticle scene-map__reticle--tl" aria-hidden="true" />
+        <span className="scene-map__reticle scene-map__reticle--tr" aria-hidden="true" />
+        <span className="scene-map__reticle scene-map__reticle--bl" aria-hidden="true" />
+        <span className="scene-map__reticle scene-map__reticle--br" aria-hidden="true" />
         <svg
           className="scene-map__svg"
           viewBox={`0 0 ${width} ${height}`}
@@ -89,11 +102,12 @@ function DensityMap({
               return (
                 <rect
                   key={`${cell.column}-${cell.row}`}
+                  className="scene-map__cell"
                   x={cell.x}
                   y={cell.y}
                   width={cell.width}
                   height={cell.height}
-                  fill={`rgba(79, 227, 255, ${0.06 + ratio * 0.46})`}
+                  fillOpacity={Math.min(1, 0.1 + ratio * 0.9)}
                 >
                   <title>
                     {`Column ${cell.column + 1}, row ${cell.row + 1}: ${cell.count} retained point${
@@ -108,10 +122,11 @@ function DensityMap({
           <g className="scene-map__paths">
             {drawable.map((track) => {
               const paths = trajectoryPaths(track.points);
-              const color = colorByTrack.get(track.trackId) ?? TRACK_COLORS[0];
+              const accent = accentByTrack.get(track.trackId) ?? TRACK_ACCENTS[0];
               return paths.segments.map((segment, index) => (
                 <path
                   key={`${track.trackId}-${index}`}
+                  className={`scene-map__path ${accent}`}
                   d={segment
                     .map(
                       (point, pointIndex) =>
@@ -119,9 +134,7 @@ function DensityMap({
                     )
                     .join(" ")}
                   fill="none"
-                  stroke={color}
-                  strokeWidth={Math.max(1.1, width / 1000)}
-                  strokeOpacity={0.55}
+                  strokeWidth={Math.max(1.2, width / 900)}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
@@ -156,14 +169,14 @@ function DensityMap({
       </div>
 
       <div className="scene-map__facts">
-        <div>
+        <div className="scene-map__fact">
           <span className="mini-label">Density basis</span>
           <p>
             Counts of retained centroid points per {density.columns}×{density.rows} frame cell.
             This is not occupancy, dwell time, optical density or a calibrated camera view.
           </p>
         </div>
-        <div>
+        <div className="scene-map__fact">
           <span className="mini-label">Peak cell</span>
           <p className="mono">
             {peak
@@ -184,6 +197,7 @@ function DensityMap({
       )}
 
       <div className="scene-track-legend">
+        <span className="mini-label scene-track-legend__title">Retained track paths</span>
         {drawable.map((track) => (
           <Link
             className="scene-track-legend__row"
@@ -191,8 +205,9 @@ function DensityMap({
             to={`/tracks?session=${encodeURIComponent(sessionId)}&track=${track.trackId}`}
           >
             <span
-              className="scene-track-legend__swatch"
-              style={{ background: colorByTrack.get(track.trackId) }}
+              className={`scene-track-legend__swatch ${
+                accentByTrack.get(track.trackId) ?? TRACK_ACCENTS[0]
+              }`}
               aria-hidden="true"
             />
             <span className="mono">{formatTrackId(track.trackId)}</span>
@@ -225,6 +240,76 @@ function DensityMap({
           outlines.
         </p>
       </div>
+    </div>
+  );
+}
+
+function ZoneEvidenceTable({
+  sessionId,
+  rows,
+}: {
+  sessionId: string;
+  rows: ReturnType<typeof zoneActivity>;
+}) {
+  const maxDwell = Math.max(0, ...rows.map((row) => row.maxDwellS ?? 0));
+  const dwellWidth = (value: number | null): number =>
+    value === null || maxDwell <= 0 ? 0 : Math.max(2, Math.min(100, (value / maxDwell) * 100));
+
+  return (
+    <div className="table-wrap">
+      <table className="table table--scene-zones">
+        <thead>
+          <tr>
+            <th>Zone</th>
+            <th>Elevated events</th>
+            <th>Tracks</th>
+            <th>Median dwell</th>
+            <th>Max dwell</th>
+            <th>First event</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.zone}>
+              <td className="mono scene-zone-cell">{row.zone}</td>
+              <td className="mono">{formatNumber(row.events)}</td>
+              <td className="mono">{formatNumber(row.tracks)}</td>
+              <td>
+                <span className="scene-dwell">
+                  <span className="scene-dwell__text mono">
+                    {row.medianDwellS === null ? "—" : `${row.medianDwellS.toFixed(2)} s`}
+                  </span>
+                  <span className="scene-dwell__track" aria-hidden="true">
+                    <span
+                      className="scene-dwell__fill"
+                      style={{ width: `${dwellWidth(row.medianDwellS)}%` }}
+                    />
+                  </span>
+                </span>
+              </td>
+              <td>
+                <span className="scene-dwell">
+                  <span className="scene-dwell__text mono">
+                    {row.maxDwellS === null ? "—" : `${row.maxDwellS.toFixed(2)} s`}
+                  </span>
+                  <span className="scene-dwell__track" aria-hidden="true">
+                    <span
+                      className="scene-dwell__fill scene-dwell__fill--max"
+                      style={{ width: `${dwellWidth(row.maxDwellS)}%` }}
+                    />
+                  </span>
+                </span>
+              </td>
+              <td>
+                <Link className="row-link row-link--inline" to={eventUrl(sessionId, row.firstEventId)}>
+                  <span className="mono">E{row.firstEventId}</span>
+                  <ArrowRightIcon width={11} height={11} />
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -372,41 +457,7 @@ export function SceneSpatial({
             </div>
           ) : zoneRows.length > 0 ? (
             <>
-              <div className="table-wrap">
-                <table className="table table--scene-zones">
-                  <thead>
-                    <tr>
-                      <th>Zone</th>
-                      <th>Elevated events</th>
-                      <th>Tracks</th>
-                      <th>Median dwell</th>
-                      <th>Max dwell</th>
-                      <th>First event</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {zoneRows.map((row) => (
-                      <tr key={row.zone}>
-                        <td className="mono">{row.zone}</td>
-                        <td className="mono">{formatNumber(row.events)}</td>
-                        <td className="mono">{formatNumber(row.tracks)}</td>
-                        <td className="mono">
-                          {row.medianDwellS === null ? "—" : `${row.medianDwellS.toFixed(2)} s`}
-                        </td>
-                        <td className="mono">
-                          {row.maxDwellS === null ? "—" : `${row.maxDwellS.toFixed(2)} s`}
-                        </td>
-                        <td>
-                          <Link className="row-link row-link--inline" to={eventUrl(sessionId, row.firstEventId)}>
-                            <span className="mono">E{row.firstEventId}</span>
-                            <ArrowRightIcon width={11} height={11} />
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ZoneEvidenceTable sessionId={sessionId} rows={zoneRows} />
               <div className="panel__pad panel__pad--tight">
                 <p className="hint hint--flush">
                   Scope: {formatNumber(zoneRows.reduce((sum, row) => sum + row.events, 0))} elevated

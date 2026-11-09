@@ -15,6 +15,7 @@ import { AnomalyTimeline } from "../components/AnomalyTimeline";
 import { AnomalyLedger } from "../components/AnomalyLedger";
 import { AnomalyDetailPanel } from "../components/AnomalyDetailPanel";
 import { FrameInvestigator } from "../components/FrameInvestigator";
+import { SectionHeader } from "../components/SectionHeader";
 
 const FETCH_CHUNK = 500;
 const MAX_EVENTS = 5_000;
@@ -197,16 +198,17 @@ export function AnomalyCenterPage() {
           </section>
 
           <section className="section">
-            <div className="section__head">
-              <span className="section__title">Event workbench</span>
-              <span className="section__meta">
-                {data
+            <SectionHeader
+              title="Event workbench"
+              level={3}
+              meta={
+                data
                   ? `${formatNumber(data.rows.length)} loaded · ${formatNumber(data.total)} reported`
                   : events.status === "error"
                     ? "Event request failed"
-                    : "Reading persisted events"}
-              </span>
-            </div>
+                    : "Reading persisted events"
+              }
+            />
             <div className="anomaly-workbench">
               <AnomalyLedger
                 sessionId={selectedId}
@@ -246,15 +248,17 @@ export function AnomalyCenterPage() {
                 </>
               }
             >
-              <FrameInvestigator
-                sessionId={selectedId}
-                media={media}
-                events={allEvents}
-                eventsReady={events.status === "ready" || events.status === "error"}
-                eventsError={events.status === "error"}
-                eventTotal={data?.total ?? 0}
-                focusFrame={selectedEvent?.frame ?? null}
-              />
+              <div className="cinema">
+                <FrameInvestigator
+                  sessionId={selectedId}
+                  media={media}
+                  events={allEvents}
+                  eventsReady={events.status === "ready" || events.status === "error"}
+                  eventsError={events.status === "error"}
+                  eventTotal={data?.total ?? 0}
+                  focusFrame={selectedEvent?.frame ?? null}
+                />
+              </div>
             </Panel>
           </section>
         </>

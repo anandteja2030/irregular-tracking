@@ -5,6 +5,7 @@ import { sceneScoredEvents, type LoadedSceneEvents } from "../lib/scene";
 import { formatNumber } from "../lib/format";
 import { formatTrackId } from "../lib/tracks";
 import { LevelBadge } from "./SessionBits";
+import { MetricCard, MetricGrid } from "./MetricCard";
 import { Panel } from "./Panel";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { AnomalyIcon, ArrowRightIcon, TrackIcon } from "./icons";
@@ -24,6 +25,12 @@ function trackUrl(sessionId: string, trackId: number): string {
   return `/tracks?session=${encodeURIComponent(sessionId)}&track=${trackId}`;
 }
 
+/** A persisted scene score is bounded 0–1; the meter only visualises it. */
+function scoreWidth(score: number | null | undefined): number {
+  if (score === null || score === undefined || !Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, score * 100));
+}
+
 export function SceneInvestigation({
   sessionId,
   scene,
@@ -38,38 +45,40 @@ export function SceneInvestigation({
 
   return (
     <div className="scene-investigation">
-      <div className="scene-deviation-metrics">
-        <div className="scene-deviation-metric">
-          <span className="scene-metric__label">Scene-scored observations</span>
-          <strong className="scene-metric__value mono">
-            {formatNumber(deviations.scene_score.samples)}
-          </strong>
-        </div>
-        <div className="scene-deviation-metric">
-          <span className="scene-metric__label">Mean scene score</span>
-          <strong className="scene-metric__value mono">
-            {formatNumber(deviations.scene_score.mean, 3)}
-          </strong>
-        </div>
-        <div className="scene-deviation-metric">
-          <span className="scene-metric__label">Max scene score</span>
-          <strong className="scene-metric__value mono">
-            {formatNumber(deviations.scene_score.max, 3)}
-          </strong>
-        </div>
-        <div className="scene-deviation-metric">
-          <span className="scene-metric__label">Above 0.20 / 0.30</span>
-          <strong className="scene-metric__value mono">
-            {formatNumber(deviations.above_0_2)} / {formatNumber(deviations.above_0_3)}
-          </strong>
-        </div>
-        <div className="scene-deviation-metric">
-          <span className="scene-metric__label">Affected tracks</span>
-          <strong className="scene-metric__value mono">
-            {formatNumber(deviations.affected_tracks)}
-          </strong>
-        </div>
-      </div>
+      <MetricGrid columns={5} label="Scene deviation metrics" className="scene-deviation-metrics">
+        <MetricCard
+          label="Scene-scored observations"
+          value={formatNumber(deviations.scene_score.samples)}
+          hint="persisted per observation"
+        />
+        <MetricCard
+          label="Mean scene score"
+          value={formatNumber(deviations.scene_score.mean, 3)}
+          meter={deviations.scene_score.mean}
+          tone="accent"
+          hint="baseline deviation"
+        />
+        <MetricCard
+          label="Max scene score"
+          value={formatNumber(deviations.scene_score.max, 3)}
+          meter={deviations.scene_score.max}
+          tone="warn"
+          hint="strongest observation"
+        />
+        <MetricCard
+          label="Above 0.20 / 0.30"
+          value={`${formatNumber(deviations.above_0_2)} / ${formatNumber(
+            deviations.above_0_3,
+          )}`}
+          hint="observation counts"
+        />
+        <MetricCard
+          label="Affected tracks"
+          value={formatNumber(deviations.affected_tracks)}
+          hint="track-level attribution"
+          tone="bad"
+        />
+      </MetricGrid>
 
       <div className="scene-investigation__grid">
         <Panel
@@ -108,7 +117,9 @@ export function SceneInvestigation({
               <div className="scene-event-list">
                 {topEvents.map((event) => (
                   <Link
-                    className="scene-event-row"
+                    className={`scene-event-row scene-event-row--${String(
+                      event.level,
+                    ).toLowerCase()}`}
                     key={event.event_id}
                     to={eventUrl(sessionId, event.event_id)}
                   >
@@ -119,6 +130,12 @@ export function SceneInvestigation({
                       {formatTrackId(event.track_id)}
                     </span>
                     <span className="scene-event-row__score mono">
+                      <span className="scene-event-row__meter" aria-hidden="true">
+                        <span
+                          className="scene-event-row__meter-fill"
+                          style={{ width: `${scoreWidth(event.scores.scene)}%` }}
+                        />
+                      </span>
                       scene {event.scores.scene?.toFixed(3)}
                     </span>
                     <span className="scene-event-row__score scene-event-row__score--fused mono">
@@ -183,9 +200,12 @@ export function SceneInvestigation({
                   const aggregate = tracks.data?.tracks.find(
                     (candidate) => candidate.track_id === track.track_id,
                   );
+                  const worst = aggregate?.observed.worst_level ?? null;
                   return (
                     <Link
-                      className="scene-track-row"
+                      className={`scene-track-row ${
+                        worst ? `scene-track-row--${worst.toLowerCase()}` : ""
+                      }`.trim()}
                       key={track.track_id}
                       to={trackUrl(sessionId, track.track_id)}
                     >
@@ -203,6 +223,12 @@ export function SceneInvestigation({
                         </span>
                       </span>
                       <span className="scene-track-row__score mono">
+                        <span className="scene-track-row__meter" aria-hidden="true">
+                          <span
+                            className="scene-track-row__meter-fill"
+                            style={{ width: `${scoreWidth(track.max_scene_score)}%` }}
+                          />
+                        </span>
                         max {track.max_scene_score.toFixed(3)}
                       </span>
                       <ArrowRightIcon width={11} height={11} />

@@ -25,11 +25,15 @@ function AnomalyRow({
   return (
     <button
       type="button"
-      className={`track-event ${active ? "is-active" : ""}`.trim()}
+      className={`track-event track-event--${event.level.toLowerCase()} ${
+        active ? "is-active" : ""
+      }`.trim()}
       onClick={onInspect}
       aria-label={`Inspect frame ${event.frame}, ${event.level} event on track ${formatTrackId(event.track_id)}`}
     >
+      <span className="track-event__rail" aria-hidden="true" />
       <span className="track-event__head">
+        <span className="mono track-event__id">E{event.event_id}</span>
         <LevelBadge level={event.level} />
         <span className="mono">F{event.frame}</span>
         {(!event.evidence?.rules || event.evidence.rules.length === 0) && (

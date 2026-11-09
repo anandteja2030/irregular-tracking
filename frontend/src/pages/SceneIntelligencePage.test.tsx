@@ -476,4 +476,106 @@ describe("scene intelligence page", () => {
     expect(screen.getByText("Zone evidence not retained")).toBeTruthy();
     expect(screen.getByText("No track deviations")).toBeTruthy();
   });
+
+  it("presents readiness coverage and every met gate for a ready calibration", async () => {
+    mockFetch();
+    renderPage();
+
+    await screen.findByText("Calibration ready");
+    const hero = document.querySelector(".calibration-hero") as HTMLElement;
+    expect(hero.dataset.state).toBe("ready");
+    expect(within(hero).getByText("Readiness coverage")).toBeTruthy();
+    expect(within(hero).getByText("100%")).toBeTruthy();
+    expect(within(hero).getByText("Readiness gates met · 120 samples")).toBeTruthy();
+    expect(within(hero).getByText("Ready")).toBeTruthy();
+
+    const gates = document.querySelectorAll(".scene-gate");
+    expect(gates.length).toBe(3);
+    expect([...gates].every((gate) => gate.classList.contains("is-met"))).toBe(true);
+    expect([...gates].every((gate) => gate.getAttribute("data-met") === "true")).toBe(true);
+    expect(screen.getAllByText("met").length).toBe(3);
+
+    // The three evidence cards keep the persisted values, not a recomputation.
+    expect(document.querySelectorAll(".scene-evidence .metric-card").length).toBe(3);
+    expect(document.querySelector(".scene-evidence .metric-card__value")?.textContent).toBe("120");
+    expect(screen.getByText("18.0 s")).toBeTruthy();
+  });
+
+  it("names the limiting gate on a not-ready calibration and keeps it distinct from a failure", async () => {
+    mockFetch({
+      scene: json({
+        ...readyScene,
+        calibration: {
+          ...readyScene.calibration,
+          ready: false,
+          samples: 12,
+          tracks: 1,
+          observed_seconds: 3,
+        },
+      }),
+    });
+    renderPage();
+
+    expect(await screen.findByText("Calibration not ready")).toBeTruthy();
+    const hero = document.querySelector(".calibration-hero") as HTMLElement;
+    expect(hero.dataset.state).toBe("warming");
+    expect(within(hero).getByText("25%")).toBeTruthy();
+    expect(within(hero).getByText("Limiting gate · Observed seconds")).toBeTruthy();
+    expect(within(hero).getByText("Not ready")).toBeTruthy();
+    expect(within(hero).getByText("Readiness gates not met · 12 samples")).toBeTruthy();
+
+    const gates = document.querySelectorAll(".scene-gate");
+    expect(gates.length).toBe(3);
+    expect([...gates].every((gate) => !gate.classList.contains("is-met"))).toBe(true);
+    expect(screen.getAllByText("below gate").length).toBe(3);
+    expect(screen.getByText(/is the limiting gate/)).toBeTruthy();
+    expect(screen.queryByText(/calibration failure/)).toBeTruthy();
+  });
+
+  it("draws the direction rose and speed cards from persisted aggregates", async () => {
+    mockFetch();
+    renderPage();
+
+    const rose = await screen.findByRole("img", {
+      name: /Direction distribution, dominant flow E, 3 of 8 octants observed/,
+    });
+    expect(rose).toBeTruthy();
+    expect(document.querySelectorAll(".direction-rose__spoke").length).toBe(8);
+    expect(document.querySelectorAll(".direction-rose__spoke.is-dominant").length).toBe(1);
+    expect(document.querySelectorAll(".direction-rose__label").length).toBe(8);
+    expect(document.querySelector(".direction-rose__core")?.textContent).toBe("E");
+    expect(document.querySelector(".direction-rose__core-value")?.textContent).toBe("60.0%");
+
+    expect(screen.getByText("Median speed")).toBeTruthy();
+    expect(screen.getByText("80.0 px/s")).toBeTruthy();
+    expect(screen.getByText("82.0 ± 21.0 px/s")).toBeTruthy();
+    expect(screen.getByText("Moving share")).toBeTruthy();
+    expect(screen.getByText("90.0%", { selector: ".metric-card__value" })).toBeTruthy();
+    expect(document.querySelector(".scene-envelope__band")).toBeTruthy();
+    // min/max are null in this payload, so no observed-edge markers are drawn.
+    expect(document.querySelectorAll(".scene-envelope__edge").length).toBe(0);
+  });
+
+  it("renders retained paths with chart accents and the source-resolution disclosure", async () => {
+    mockFetch();
+    renderPage();
+
+    await screen.findByRole("img", { name: /Retained centroid density/ });
+    expect(document.querySelectorAll(".scene-map__path.scene-accent--1").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".scene-map__path.scene-accent--2").length).toBeGreaterThan(0);
+    expect(screen.getByText("Retained track paths")).toBeTruthy();
+    expect(
+      document.querySelectorAll(".scene-track-legend__swatch.scene-accent--2").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText(/1,280×720 px/)).toBeTruthy();
+    expect(document.querySelectorAll(".scene-map__reticle").length).toBe(4);
+
+    const zonePanel = screen.getByText("Zone evidence").closest(".panel") as HTMLElement;
+    expect(within(zonePanel).getByText("3.50 s")).toBeTruthy();
+    expect(within(zonePanel).getByText("4.50 s")).toBeTruthy();
+    expect(within(zonePanel).getByRole("link", { name: /E101/ }).getAttribute("href")).toBe(
+      `/anomalies?session=${SESSION}&event=101`,
+    );
+    expect(document.querySelectorAll(".table--scene-zones .scene-dwell").length).toBe(2);
+  });
 });

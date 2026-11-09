@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useNavigate } from "react-router-dom";
 import { AppRoutes } from "../App";
 import { ApiHealthProvider } from "../app/ApiHealthProvider";
@@ -278,7 +278,12 @@ describe("track explorer", () => {
     mockFetch();
     renderExplorer();
 
-    const t3 = await screen.findByRole("button", { name: /Track T03, 20 observations/ });
+    // First paint gates the whole test; give the cold transform/cache a window.
+    const t3 = await screen.findByRole(
+      "button",
+      { name: /Track T03, 20 observations/ },
+      { timeout: 5000 },
+    );
     expect(screen.getByRole("button", { name: /Track T00, 20 observations/ })).toBeTruthy();
     await waitFor(() => expect(screen.getByText("T03 · measured lifecycle and motion")).toBeTruthy());
     expect((await screen.findAllByText(/sudden_acceleration/)).length).toBeGreaterThan(0);
@@ -361,6 +366,73 @@ describe("track explorer", () => {
     await waitFor(() => expect(screen.getAllByText("F00018").length).toBeGreaterThan(0));
     expect(screen.getByRole("button", { name: /Track T00/ }).className).toContain(
       "is-active",
+    );
+  });
+
+  it("frames the selected object in an identity deck and keeps it current", async () => {
+    mockFetch();
+    renderExplorer();
+
+    await screen.findByRole("button", { name: /Track T03/ });
+    const deck = document.querySelector(".track-deck") as HTMLElement;
+    expect(deck).toBeTruthy();
+    expect(within(deck).getByRole("heading", { level: 2 }).textContent).toBe("T03");
+    const facts = deck.querySelector(".track-deck__facts")?.textContent ?? "";
+    expect(facts).toContain("Observations");
+    expect(facts).toContain("20");
+    expect(facts).toContain("Elevated events");
+    expect(facts).toContain("2");
+    expect(facts).toContain("F0–F39");
+    expect(facts).toContain("120 px/s");
+
+    // The severity rail mirrors the object's recorded worst level.
+    expect(screen.getByRole("button", { name: /Track T03/ }).className).toContain(
+      "track-row--suspicious",
+    );
+    expect(screen.getByRole("button", { name: /Track T00/ }).className).toContain(
+      "track-row--normal",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Track T00/ }));
+    await waitFor(() =>
+      expect(within(deck).getByRole("heading", { level: 2 }).textContent).toBe("T00"),
+    );
+    await waitFor(() => expect(deck.textContent).toContain("0"));
+  });
+
+  it("clears a filtered index without losing the selection", async () => {
+    mockFetch();
+    renderExplorer();
+
+    await screen.findByRole("button", { name: /Track T03/ });
+    fireEvent.change(screen.getByLabelText("Search tracks"), { target: { value: "green" } });
+    expect(screen.queryByRole("button", { name: /Track T03/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear track search" }));
+    expect(await screen.findByRole("button", { name: /Track T03/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Track T00/ })).toBeTruthy();
+    expect((screen.getByLabelText("Search tracks") as HTMLInputElement).value).toBe("");
+  });
+
+  it("presents the trajectory key and a filled speed series without inventing gaps", async () => {
+    mockFetch();
+    renderExplorer();
+
+    await screen.findByText("T03 · measured lifecycle and motion");
+    await screen.findByRole("img", { name: /Persisted centroid path for track T03/ });
+    await screen.findByRole("img", { name: /^Speed over/ });
+    const legend = document.querySelector(".trajectory__legend");
+    expect(legend?.textContent).toContain("Normal");
+    expect(legend?.textContent).toContain("Suspicious");
+    expect(legend?.textContent).toContain("Irregular");
+    expect(legend?.textContent).toContain("start");
+
+    // Every filled segment belongs to a run of real samples; missing speeds
+    // split the series instead of being drawn as zero.
+    const areas = document.querySelectorAll(".motion-chart__area");
+    expect(areas.length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".motion-chart__line--speed").length).toBe(
+      areas.length,
     );
   });
 

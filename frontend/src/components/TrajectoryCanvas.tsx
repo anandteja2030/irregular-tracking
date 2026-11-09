@@ -130,6 +130,19 @@ export function TrajectoryCanvas({
         )}
       </svg>
 
+      <span className="trajectory__legend" aria-hidden="true">
+        <span>
+          <i className="motion-dot motion-dot--normal" />Normal
+        </span>
+        <span>
+          <i className="motion-dot motion-dot--suspicious" />Suspicious
+        </span>
+        <span>
+          <i className="motion-dot motion-dot--irregular" />Irregular
+        </span>
+        <span className="trajectory__legend-path">start → end</span>
+      </span>
+
       <div className="trajectory__readout">
         {selected && selected.x !== null && selected.y !== null ? (
           <>

@@ -398,4 +398,75 @@ describe("evaluation and reports", () => {
     expect(screen.getByText(/CSV exports will contain/)).toBeTruthy();
     expect(screen.queryByText(/NaN/)).toBeNull();
   });
+
+  it("frames a ready evaluation with a readiness hero, meter-backed metrics and a matrix legend", async () => {
+    mockFetch();
+    renderPage();
+
+    await screen.findByText("Accuracy");
+
+    const hero = document.querySelector(".eval-hero") as HTMLElement;
+    expect(hero.dataset.tone).toBe("ok");
+    expect(hero.querySelector(".eval-hero__title")?.textContent).toBe("Evaluation ready");
+    expect(hero.querySelector(".eval-hero__coverage-value")?.textContent).toContain("8");
+    expect(hero.querySelector(".eval-hero__coverage-value")?.textContent).toContain("40");
+    expect(hero.querySelector(".eval-hero__coverage-bar > span")).toBeTruthy();
+
+    const cards = document.querySelectorAll(".eval-layout .metric-card");
+    expect(cards).toHaveLength(5);
+    cards.forEach((card) => expect(card.querySelector(".metric-card__meter")).toBeTruthy());
+
+    const matrixCells = document.querySelectorAll(".confusion__name");
+    expect(matrixCells).toHaveLength(4);
+    expect(document.querySelector(".confusion__cell--tp .confusion__name")?.textContent).toBe(
+      "True positive",
+    );
+    expect(document.querySelector(".confusion__cell--fn .confusion__name")?.textContent).toBe(
+      "False negative",
+    );
+
+    const legend = document.querySelectorAll(".eval-legend__item");
+    expect(legend).toHaveLength(4);
+    expect(document.querySelector(".eval-legend__item--fp .eval-legend__detail")?.textContent).toBe(
+      "predicted anomaly · labelled normal",
+    );
+
+    expect(document.querySelectorAll(".export-row__arrow")).toHaveLength(3);
+    expect(screen.getByText("server-rendered")).toBeTruthy();
+  });
+
+  it("explains a one-class run with a label balance instead of scores", async () => {
+    mockFetch();
+    renderPage(ONE_CLASS);
+
+    await screen.findByText("Not enough label diversity");
+
+    const hero = document.querySelector(".eval-hero") as HTMLElement;
+    expect(hero.dataset.tone).toBe("warn");
+    expect(hero.querySelector(".eval-hero__title")?.textContent).toBe("Insufficient label diversity");
+    expect(document.querySelector(".eval-layout .metric-card")).toBeNull();
+    expect(document.querySelector(".confusion")).toBeNull();
+
+    const anomaly = document.querySelector(".eval-balance__fill--anomaly") as HTMLElement;
+    expect(anomaly).toBeTruthy();
+    expect(anomaly.style.width).toBe("100%");
+    const normal = document.querySelector(".eval-balance__fill--normal") as HTMLElement;
+    expect(normal.style.width).toBe("0%");
+    expect(document.querySelector(".eval-panel")?.textContent).toContain("share of stored labels");
+  });
+
+  it("keeps a label-only response visibly unscored with no ROC-AUC fallback", async () => {
+    mockFetch();
+    renderPage(MISSING);
+
+    await screen.findByText("Metrics unavailable", { selector: ".state__title" });
+
+    const hero = document.querySelector(".eval-hero") as HTMLElement;
+    expect(hero.dataset.tone).toBe("warn");
+    expect(hero.querySelector(".eval-hero__title")?.textContent).toBe("Metrics unavailable");
+    expect(document.querySelector(".confusion")).toBeNull();
+    expect(document.querySelector(".eval-legend")).toBeNull();
+    expect(screen.queryByText("ROC-AUC not available")).toBeNull();
+    expect(screen.queryByText("0.000")).toBeNull();
+  });
 });

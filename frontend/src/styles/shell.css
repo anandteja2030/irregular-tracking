@@ -1,4 +1,15 @@
-/* Application shell: ambient field, navigation rail, top bar, workspace. */
+/* Application shell — ambient field, navigation rail, top bar, workspace.
+ *
+ * Phase 13.3: command-center shell. All shell breakpoints live in this file so
+ * the rail, the top bar and the session switcher change shape at the same
+ * widths (1180 compact rail, 900 dense chrome, 720 bottom rail + two-row bar).
+ *
+ * Cost notes: glass is built from layered translucent gradients and edge
+ * highlights, not from full-surface `backdrop-filter` — the rail and the bar do
+ * not need to blur anything behind them, so they no longer pay for it. The
+ * ambient auroras drop their 90px blur filter and rely on their own radial
+ * falloff, and only static layers remain where animation is decorative.
+ */
 
 .app {
   position: relative;
@@ -23,36 +34,50 @@
 .ambient__aurora {
   position: absolute;
   border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.5;
-  will-change: transform;
+  /* Soft falloff replaces a 90px blur filter: same glow, far cheaper paint. */
+  opacity: 0.55;
 }
 
 .ambient__aurora--one {
-  width: 46vw;
-  height: 46vw;
-  top: -18vw;
-  left: -8vw;
-  background: radial-gradient(circle, rgba(96, 108, 255, 0.3), transparent 66%);
-  animation: drift-a 34s var(--ease-inout) infinite alternate;
+  width: 58vw;
+  height: 58vw;
+  top: -24vw;
+  left: -14vw;
+  background: radial-gradient(
+    circle,
+    rgba(96, 108, 255, 0.34) 0%,
+    rgba(96, 108, 255, 0.16) 34%,
+    rgba(96, 108, 255, 0.04) 56%,
+    transparent 68%
+  );
+  animation: drift-a 40s var(--ease-inout) infinite alternate;
 }
 
 .ambient__aurora--two {
-  width: 40vw;
-  height: 40vw;
-  top: 12vh;
-  right: -14vw;
-  background: radial-gradient(circle, rgba(52, 196, 232, 0.18), transparent 68%);
-  animation: drift-b 42s var(--ease-inout) infinite alternate;
+  width: 52vw;
+  height: 52vw;
+  top: 8vh;
+  right: -20vw;
+  background: radial-gradient(
+    circle,
+    rgba(52, 196, 232, 0.22) 0%,
+    rgba(52, 196, 232, 0.1) 38%,
+    transparent 68%
+  );
+  animation: drift-b 52s var(--ease-inout) infinite alternate;
 }
 
 .ambient__aurora--three {
-  width: 52vw;
-  height: 36vw;
-  bottom: -22vw;
+  width: 60vw;
+  height: 42vw;
+  bottom: -26vw;
   left: 26vw;
-  background: radial-gradient(circle, rgba(88, 74, 190, 0.16), transparent 70%);
-  animation: drift-c 48s var(--ease-inout) infinite alternate;
+  background: radial-gradient(
+    ellipse,
+    rgba(88, 74, 190, 0.2) 0%,
+    rgba(88, 74, 190, 0.07) 42%,
+    transparent 70%
+  );
 }
 
 .ambient__grid {
@@ -93,58 +118,108 @@
   }
 }
 
-@keyframes drift-c {
-  to {
-    transform: translate3d(-4vw, -5vh, 0) scale(1.15);
-  }
+/* --------------------------------------------------------------- skip link */
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: var(--z-toast);
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--r-xs);
+  background: var(--raise-3);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: var(--type-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  box-shadow: var(--shadow-float);
+  transform: translateY(-160%);
+  transition: transform var(--fast) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
 }
 
 /* --------------------------------------------------------------- the rail */
 .rail {
   position: relative;
-  z-index: 3;
+  z-index: var(--z-rail);
   display: flex;
   flex-direction: column;
   width: var(--rail-w);
   flex: 0 0 var(--rail-w);
   height: 100%;
-  padding: 18px 14px 14px;
-  background: linear-gradient(180deg, rgba(13, 15, 22, 0.86), rgba(7, 8, 13, 0.72));
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  padding: 16px 12px 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(15, 18, 30, 0.95) 0%,
+    rgba(9, 11, 18, 0.92) 54%,
+    rgba(7, 8, 14, 0.96) 100%
+  );
   border-right: 1px solid var(--hairline);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    inset -1px 0 0 rgba(79, 227, 255, 0.04);
 }
 
+/* Static bloom at the top of the rail: depth without a blur pass. */
+.rail::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 180px;
+  background: radial-gradient(120% 100% at 16% 0%, rgba(79, 227, 255, 0.09), transparent 72%);
+  pointer-events: none;
+}
+
+/* Edge highlight: cyan to indigo hairline down the inner seam. */
 .rail::after {
   content: "";
   position: absolute;
   top: 0;
   right: -1px;
+  bottom: 0;
   width: 1px;
-  height: 100%;
-  background: linear-gradient(180deg, rgba(112, 123, 255, 0.4), transparent 34%, transparent 70%, rgba(79, 227, 255, 0.18));
-  opacity: 0.6;
+  background: linear-gradient(
+    180deg,
+    rgba(79, 227, 255, 0.42),
+    rgba(112, 123, 255, 0.18) 30%,
+    transparent 68%,
+    rgba(79, 227, 255, 0.12)
+  );
+  opacity: 0.8;
+  pointer-events: none;
 }
 
 .brand {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 4px 8px 18px;
+  gap: 10px;
+  padding: 2px 6px 14px;
+  margin-bottom: 14px;
   border-bottom: 1px solid var(--hairline);
-  margin-bottom: 16px;
+  min-width: 0;
 }
 
 .brand__mark {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   border-radius: 11px;
-  background: linear-gradient(150deg, rgba(112, 123, 255, 0.24), rgba(79, 227, 255, 0.08));
-  border: 1px solid rgba(112, 123, 255, 0.32);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 24px -14px rgba(112, 123, 255, 0.9);
-  color: var(--indigo-bright);
+  background: linear-gradient(150deg, rgba(79, 227, 255, 0.2), rgba(112, 123, 255, 0.12));
+  border: 1px solid rgba(79, 227, 255, 0.32);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 10px 24px -16px rgba(79, 227, 255, 0.9);
+  color: var(--accent-bright);
 }
 
 .brand__text {
@@ -157,7 +232,7 @@
 .brand__name {
   font-family: var(--mono);
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: var(--weight-bold);
   letter-spacing: 0.16em;
   color: var(--ink-100);
   white-space: nowrap;
@@ -165,18 +240,18 @@
 
 .brand__tag {
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: var(--type-3xs);
   letter-spacing: 0.16em;
   color: var(--ink-30);
   white-space: nowrap;
 }
 
 .rail__section {
-  padding: 0 10px;
-  margin: 6px 0 8px;
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 0 10px;
+  margin: 4px 0 10px;
 }
 
 .rail__section::after {
@@ -191,6 +266,7 @@
   flex-direction: column;
   gap: 3px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 10px;
 }
 
@@ -199,13 +275,16 @@
   display: flex;
   align-items: center;
   gap: 11px;
-  height: 38px;
+  min-height: 44px;
   padding: 0 10px;
   border-radius: var(--r-sm);
   border: 1px solid transparent;
   color: var(--ink-45);
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease),
-    border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    color var(--fast) var(--ease),
+    background-color var(--fast) var(--ease),
+    border-color var(--fast) var(--ease);
 }
 
 .nav-item__icon {
@@ -219,7 +298,7 @@
 
 .nav-item__label {
   font-size: 12.8px;
-  font-weight: 480;
+  font-weight: var(--weight-medium);
   letter-spacing: -0.003em;
   white-space: nowrap;
   overflow: hidden;
@@ -237,7 +316,7 @@
 
 .nav-item:hover {
   color: var(--ink-80);
-  background: rgba(255, 255, 255, 0.032);
+  background-color: rgba(255, 255, 255, 0.034);
   border-color: var(--hairline);
 }
 
@@ -247,29 +326,33 @@
 
 .nav-item.is-active {
   color: var(--ink-100);
-  background: linear-gradient(90deg, rgba(112, 123, 255, 0.16), rgba(112, 123, 255, 0.03) 70%, transparent);
-  border-color: rgba(112, 123, 255, 0.2);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background:
+    linear-gradient(90deg, rgba(79, 227, 255, 0.16), rgba(79, 227, 255, 0.03) 62%, transparent);
+  border-color: rgba(79, 227, 255, 0.26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 26px -22px rgba(79, 227, 255, 0.9);
 }
 
 .nav-item.is-active .nav-item__icon {
-  color: var(--indigo-bright);
+  color: var(--accent-bright);
+  filter: drop-shadow(0 0 6px rgba(79, 227, 255, 0.45));
 }
 
 .nav-item.is-active::before {
   content: "";
   position: absolute;
   left: -1px;
-  top: 9px;
-  bottom: 9px;
+  top: 10px;
+  bottom: 10px;
   width: 2px;
   border-radius: 2px;
-  background: linear-gradient(180deg, var(--electric), var(--indigo));
-  box-shadow: 0 0 12px rgba(112, 123, 255, 0.85);
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px rgba(79, 227, 255, 0.8);
 }
 
 .nav-item.is-active .nav-item__index {
-  color: var(--indigo);
+  color: var(--accent);
 }
 
 .rail__footer {
@@ -285,11 +368,12 @@
   display: flex;
   align-items: center;
   gap: 9px;
+  min-width: 0;
   padding: 9px 10px;
   border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.022);
   border: 1px solid var(--hairline);
-  min-width: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
 }
 
 .rail-status__text {
@@ -341,16 +425,76 @@
 }
 
 .topbar {
+  position: relative;
+  z-index: var(--z-topbar);
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   height: var(--topbar-h);
   flex: 0 0 var(--topbar-h);
-  padding: 0 26px 0 28px;
+  padding: 0 18px 0 24px;
   border-bottom: 1px solid var(--hairline);
-  background: linear-gradient(180deg, rgba(10, 12, 18, 0.72), rgba(8, 9, 14, 0.5));
-  backdrop-filter: blur(18px) saturate(130%);
-  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  background: linear-gradient(180deg, rgba(11, 14, 22, 0.88), rgba(7, 9, 15, 0.8));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* Edge highlight along the bar's lower seam. */
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(79, 227, 255, 0.3),
+    rgba(112, 123, 255, 0.16) 28%,
+    transparent 72%
+  );
+  pointer-events: none;
+}
+
+.topbar__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Brand is carried by the rail on wide screens and by this mark on narrow ones. */
+.topbar__brand {
+  display: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 10px;
+  border: 1px solid rgba(79, 227, 255, 0.3);
+  background: linear-gradient(150deg, rgba(79, 227, 255, 0.18), rgba(112, 123, 255, 0.1));
+  color: var(--accent-bright);
+}
+
+.topbar__session {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.topbar__health {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .crumbs {
@@ -379,51 +523,100 @@
   text-overflow: ellipsis;
 }
 
-.topbar__meta {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+/* ------------------------------------------------------- health + palette */
+.shell-health {
+  height: 30px;
 }
 
-.health-pill {
+.shell-health__value {
+  margin-left: 2px;
+  color: var(--ink-100);
+  letter-spacing: 0.04em;
+}
+
+.palette-trigger {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  padding: 0 11px;
-  border-radius: 999px;
+  min-height: 36px;
+  padding: 0 9px;
   border: 1px solid var(--hairline-2);
-  background: rgba(255, 255, 255, 0.03);
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--ink-60);
-  transition: border-color var(--base) var(--ease), color var(--base) var(--ease),
-    background var(--base) var(--ease);
+  border-radius: var(--r-xs);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  color: var(--ink-45);
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    color var(--fast) var(--ease),
+    border-color var(--fast) var(--ease),
+    background-color var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
 }
 
-.health-pill__value {
+.palette-trigger:hover {
   color: var(--ink-100);
+  border-color: rgba(79, 227, 255, 0.34);
+  background-color: rgba(79, 227, 255, 0.07);
+  box-shadow: 0 10px 24px -20px rgba(79, 227, 255, 0.9);
 }
 
-.health-pill.is-live {
-  border-color: rgba(70, 221, 166, 0.3);
-  background: rgba(70, 221, 166, 0.07);
-  color: #9fe9cd;
+.palette-trigger__glyph {
+  display: grid;
+  place-items: center;
+  color: currentColor;
 }
 
-.health-pill.is-down {
-  border-color: rgba(255, 100, 133, 0.32);
-  background: rgba(255, 100, 133, 0.08);
-  color: #ffb3c3;
+.palette-trigger__label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.health-pill.is-pending {
-  border-color: var(--hairline-2);
+.palette-trigger__key {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--hairline-2);
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1;
+  color: var(--ink-30);
 }
 
+/* ------------------------------------------------ session switcher (shell) */
+.topbar .session-select {
+  gap: 8px;
+  max-width: 100%;
+}
+
+.topbar .session-select__label {
+  color: var(--ink-30);
+  white-space: nowrap;
+}
+
+.topbar .session-select__control {
+  max-width: clamp(150px, 26vw, 260px);
+  min-height: 34px;
+  border-radius: var(--r-xs);
+  background-color: var(--raise-1);
+  color: var(--ink-60);
+}
+
+.topbar .session-select__control:hover:not(:disabled) {
+  border-color: rgba(79, 227, 255, 0.3);
+}
+
+/* A native select keeps its platform menu; only the trigger is restyled. */
+.topbar .session-select__control:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* --------------------------------------------------------------- the dot */
 .dot {
   width: 6px;
   height: 6px;
@@ -459,34 +652,6 @@
   }
 }
 
-.kbd {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 9px;
-  border-radius: var(--r-xs);
-  border: 1px solid var(--hairline-2);
-  background: rgba(255, 255, 255, 0.028);
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  color: var(--ink-45);
-  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease),
-    background var(--fast) var(--ease);
-}
-
-.kbd:hover {
-  color: var(--ink-100);
-  border-color: var(--hairline-3);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.kbd__glyph {
-  font-size: 11px;
-  color: var(--ink-60);
-}
-
 .workspace {
   flex: 1;
   min-height: 0;
@@ -494,6 +659,11 @@
   overflow-x: hidden;
   padding: 30px 34px 56px;
   scroll-behavior: smooth;
+}
+
+.workspace:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: -3px;
 }
 
 .workspace__inner {
@@ -538,12 +708,12 @@
   content: "";
   width: 18px;
   height: 1px;
-  background: linear-gradient(90deg, var(--indigo), transparent);
+  background: linear-gradient(90deg, var(--accent), transparent);
 }
 
 .page-head h1 {
   font-size: 27px;
-  font-weight: 560;
+  font-weight: var(--weight-strong);
   letter-spacing: -0.028em;
 }
 
@@ -564,22 +734,24 @@
 }
 
 /* --------------------------------------------------------------- responsive */
+/* 1180 — the rail folds to an icon column. Every nav link keeps its accessible
+   name (aria-label) and a 44px target; the visible label and index fold away. */
 @media (max-width: 1180px) {
   .rail {
     width: var(--rail-w-compact);
     flex-basis: var(--rail-w-compact);
-    padding: 16px 12px 14px;
+    padding: 14px 10px 12px;
+    align-items: stretch;
   }
 
   .brand {
     justify-content: center;
-    padding: 4px 0 16px;
+    padding: 2px 0 12px;
   }
 
   .brand__text,
   .nav-item__label,
   .nav-item__index,
-  .rail__section,
   .rail-status__text,
   .rail__version span:first-child {
     display: none;
@@ -587,42 +759,62 @@
 
   .rail__section {
     height: 1px;
-    margin: 8px 6px;
-    background: var(--hairline);
+    margin: 6px 6px 10px;
     padding: 0;
+    background: var(--hairline);
   }
 
   .rail__section::after {
     display: none;
   }
 
+  .rail__nav {
+    align-items: stretch;
+  }
+
   .nav-item {
     justify-content: center;
     padding: 0;
-    height: 42px;
+    min-height: 46px;
   }
 
   .nav-item.is-active::before {
-    left: -12px;
+    left: -11px;
   }
 
   .rail-status {
     justify-content: center;
-    padding: 11px 0;
+    padding: 12px 0;
   }
 
   .rail__version {
     justify-content: center;
   }
+
+  .topbar {
+    padding: 0 16px 0 20px;
+  }
 }
 
+/* 900 — dense chrome: the palette trigger drops its word, the bar tightens. */
 @media (max-width: 900px) {
   .workspace {
     padding: 24px 20px 48px;
   }
 
   .topbar {
-    padding: 0 16px;
+    padding: 0 14px;
+    gap: 10px;
+  }
+
+  .palette-trigger__label {
+    display: none;
+  }
+
+  .palette-trigger {
+    min-width: 40px;
+    justify-content: center;
+    padding: 0 8px;
   }
 
   .page-head {
@@ -636,25 +828,37 @@
   }
 }
 
+/* 720 — the rail becomes a bottom navigation bar and the top bar splits into
+   identity/actions plus a full-width session row, so the switcher keeps a real
+   label and a 44px target instead of collapsing to a truncated sliver. */
 @media (max-width: 720px) {
   .app {
     flex-direction: column;
   }
 
-  .rail {
-    order: 2;
-    width: 100%;
-    flex: 0 0 58px;
-    height: 58px;
-    flex-direction: row;
-    align-items: center;
-    padding: 0 8px;
-    border-right: 0;
-    border-top: 1px solid var(--hairline);
-    overflow-x: auto;
-    gap: 2px;
+  .shell {
+    order: 1;
+    height: auto;
+    min-height: 0;
+    flex: 1 1 auto;
   }
 
+  .rail {
+    order: 2;
+    flex: 0 0 auto;
+    width: 100%;
+    height: auto;
+    min-height: 60px;
+    flex-direction: row;
+    align-items: center;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid var(--hairline);
+    box-shadow: inset 0 1px 0 rgba(79, 227, 255, 0.1);
+    background: linear-gradient(180deg, rgba(10, 12, 20, 0.97), rgba(6, 7, 12, 0.99));
+  }
+
+  .rail::before,
   .rail::after,
   .rail__section,
   .rail__footer,
@@ -664,43 +868,92 @@
 
   .rail__nav {
     flex-direction: row;
+    flex: 1 1 auto;
+    width: 100%;
+    gap: 2px;
+    padding: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 0;
-    gap: 2px;
+    justify-content: space-between;
+    scrollbar-width: none;
+  }
+
+  .rail__nav::-webkit-scrollbar {
+    display: none;
   }
 
   .nav-item {
-    height: 44px;
-    width: 44px;
-    flex: 0 0 44px;
+    flex: 1 1 44px;
+    min-width: 44px;
+    min-height: 48px;
+    justify-content: center;
+    padding: 0;
   }
 
   .nav-item.is-active::before {
-    left: 10px;
-    right: 10px;
+    left: 12px;
+    right: 12px;
     top: auto;
-    bottom: 3px;
+    bottom: 2px;
     width: auto;
     height: 2px;
-    background: linear-gradient(90deg, var(--electric), var(--indigo));
-  }
-
-  .shell {
-    order: 1;
-    height: auto;
-    min-height: 0;
-  }
-
-  .workspace {
-    padding: 20px 16px 32px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 10px rgba(79, 227, 255, 0.7);
   }
 
   .topbar {
-    height: 54px;
-    flex-basis: 54px;
-    padding: 0 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "identity actions"
+      "session health";
+    align-items: center;
+    gap: 8px 10px;
+    height: auto;
+    flex: 0 0 auto;
+    padding: 8px 12px 10px;
+  }
+
+  .topbar__identity {
+    grid-area: identity;
     gap: 10px;
+  }
+
+  .topbar__brand {
+    display: grid;
+  }
+
+  .topbar__session {
+    grid-area: session;
+    margin-left: 0;
+  }
+
+  .topbar__health {
+    grid-area: health;
+    justify-self: end;
+  }
+
+  .topbar__actions {
+    grid-area: actions;
+  }
+
+  .topbar .session-select {
+    width: 100%;
+    gap: 7px;
+  }
+
+  .topbar .session-select__label {
+    display: block;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+  }
+
+  .topbar .session-select__control {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+    min-height: 44px;
+    font-size: 11px;
   }
 
   .crumbs__root,
@@ -713,24 +966,75 @@
     letter-spacing: 0.1em;
   }
 
-  .topbar__meta {
+  .crumbs {
     gap: 6px;
   }
 
-  .health-pill {
-    height: 28px;
+  .palette-trigger {
+    min-width: 44px;
+    min-height: 44px;
     padding: 0 9px;
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    gap: 6px;
-    white-space: nowrap;
+  }
+
+  .shell-health {
+    height: 26px;
+  }
+
+  .workspace {
+    padding: 18px 14px 32px;
   }
 
   .page-head h1 {
     font-size: 23px;
   }
+}
 
-  .health-pill .health-pill__value {
+/* 460 — the tightest supported bar: keep branding, session and palette, and
+   drop only the decorative uptime readout. */
+@media (max-width: 460px) {
+  .shell-health__value {
     display: none;
+  }
+
+  .topbar .session-select__label {
+    display: none;
+  }
+
+  .crumbs__leaf {
+    max-width: 15ch;
+  }
+}
+
+/* Coarse pointers get comfortable targets even on the denser desktop chrome. */
+@media (pointer: coarse) {
+  .nav-item,
+  .palette-trigger,
+  .topbar .session-select__control,
+  .skip-link {
+    min-height: 44px;
+  }
+
+  .rail-status {
+    min-height: 44px;
+  }
+}
+
+/* ------------------------------------------------------------ reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ambient__aurora,
+  .dot--live,
+  .workspace__inner,
+  .skip-link {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .workspace {
+    scroll-behavior: auto;
+  }
+
+  .nav-item,
+  .palette-trigger {
+    transition: none;
   }
 }

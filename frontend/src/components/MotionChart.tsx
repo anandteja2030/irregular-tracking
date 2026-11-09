@@ -25,38 +25,61 @@ function segmentsFor(
   samples: MotionSample[],
   value: (sample: MotionSample) => number | null,
   y: (raw: number) => number,
-): { path: string; dots: { x: number; y: number; level: string }[] }[] {
-  const segments: { path: string; dots: { x: number; y: number; level: string }[] }[] = [];
+): {
+  path: string;
+  area: string;
+  dots: { x: number; y: number; level: string }[];
+}[] {
+  const segments: {
+    path: string;
+    area: string;
+    dots: { x: number; y: number; level: string }[];
+  }[] = [];
   let path = "";
   let dots: { x: number; y: number; level: string }[] = [];
+  let firstX: number | null = null;
+  let lastX: number | null = null;
   let previousFrame: number | null = null;
 
   for (const sample of samples) {
     const raw = value(sample);
     if (raw === null || !Number.isFinite(raw)) {
       if (path) {
-        segments.push({ path, dots });
+        segments.push({ path, area: areaPath(path, firstX, lastX), dots });
         path = "";
         dots = [];
+        firstX = null;
+        lastX = null;
       }
       previousFrame = null;
       continue;
     }
     if (previousFrame !== null && sample.frame - previousFrame > 1 && path) {
-      segments.push({ path, dots });
+      segments.push({ path, area: areaPath(path, firstX, lastX), dots });
       path = "";
       dots = [];
+      firstX = null;
+      lastX = null;
     }
     const x = frameX(sample.frame, samples[0].frame, samples[samples.length - 1].frame);
     const py = y(raw);
     path += `${path ? "L" : "M"}${x.toFixed(1)} ${py.toFixed(1)} `;
+    if (firstX === null) firstX = x;
+    lastX = x;
     if (sample.level !== "Normal") {
       dots.push({ x, y: py, level: sample.level });
     }
     previousFrame = sample.frame;
   }
-  if (path) segments.push({ path, dots });
+  if (path) segments.push({ path, area: areaPath(path, firstX, lastX), dots });
   return segments;
+}
+
+/** Closed fill under a measured segment; gaps stay gaps because each segment
+ * is filled only between its own real samples. */
+function areaPath(path: string, firstX: number | null, lastX: number | null): string {
+  if (firstX === null || lastX === null) return "";
+  return `${path}L${lastX.toFixed(1)} ${SPEED_HEIGHT - PAD}L${firstX.toFixed(1)} ${SPEED_HEIGHT - PAD} Z`;
 }
 
 export function MotionChart({
@@ -124,6 +147,9 @@ export function MotionChart({
         <text x={PAD} y={SPEED_HEIGHT - 3} className="motion-chart__axis">0</text>
         {speedSegments.map((segment, index) => (
           <g key={`speed-${index}`}>
+            {segment.area && (
+              <path d={segment.area} className="motion-chart__area" />
+            )}
             <path d={segment.path} className="motion-chart__line motion-chart__line--speed" />
             {segment.dots.map((dot, dotIndex) => (
               <circle

@@ -9,6 +9,7 @@ import type {
 import { formatNumber } from "../lib/format";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { SectionHeader } from "../components/SectionHeader";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { SceneIcon } from "../components/icons";
 import { SceneCalibration } from "../components/SceneCalibration";
@@ -196,17 +197,18 @@ export function SceneIntelligencePage() {
             />
           </section>
 
-          <section className="section">
-            <div className="section__head">
-              <span className="section__title">Spatial scene</span>
-              <span className="section__meta">
-                {session.data?.artifacts.trajectories
+          <section className="section" aria-labelledby="scene-spatial-title">
+            <SectionHeader
+              id="scene-spatial-title"
+              title="Spatial scene"
+              meta={
+                session.data?.artifacts.trajectories
                   ? "Retained centroids"
                   : session.status === "error"
                     ? "Retention unknown"
-                    : "No retained coordinates"}
-              </span>
-            </div>
+                    : "No retained coordinates"
+              }
+            />
             <SceneSpatial
               sessionId={selectedId}
               session={session}
@@ -218,14 +220,17 @@ export function SceneIntelligencePage() {
             />
           </section>
 
-          <section className="section">
-            <div className="section__head">
-              <span className="section__title">Scene investigation</span>
-              <span className="section__meta">
-                {formatNumber(sceneData.deviations.affected_tracks)} affected tracks ·{" "}
-                {formatNumber(sceneData.deviations.above_0_2)} observations ≥0.20
-              </span>
-            </div>
+          <section className="section" aria-labelledby="scene-investigation-title">
+            <SectionHeader
+              id="scene-investigation-title"
+              title="Scene investigation"
+              meta={
+                <>
+                  {formatNumber(sceneData.deviations.affected_tracks)} affected tracks ·{" "}
+                  {formatNumber(sceneData.deviations.above_0_2)} observations ≥0.20
+                </>
+              }
+            />
             <SceneInvestigation
               sessionId={selectedId}
               scene={sceneData}

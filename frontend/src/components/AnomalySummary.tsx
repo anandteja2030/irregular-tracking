@@ -19,6 +19,8 @@ import { ArrowRightIcon, TrackIcon } from "./icons";
 import { LevelBadge, LevelMeter } from "./SessionBits";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { Panel } from "./Panel";
+import { MetricCard, MetricGrid } from "./MetricCard";
+import { SectionHeader } from "./SectionHeader";
 
 const LEVELS: Level[] = ["Normal", "Suspicious", "Irregular"];
 
@@ -60,14 +62,12 @@ export function AnomalySummary({
 
   return (
     <section className="section" aria-labelledby="anomaly-summary-title">
-      <div className="section__head">
-        <span className="section__title" id="anomaly-summary-title">
-          Intelligence summary
-        </span>
-        <span className="section__meta">
-          {data ? `${formatNumber(observations)} persisted observations` : "Reading session"}
-        </span>
-      </div>
+      <SectionHeader
+        title="Intelligence summary"
+        id="anomaly-summary-title"
+        level={3}
+        meta={data ? `${formatNumber(observations)} persisted observations` : "Reading session"}
+      />
 
       {summary.status === "error" ? (
         <Panel>
@@ -84,28 +84,42 @@ export function AnomalySummary({
         </Panel>
       ) : (
         <>
-          <div className="anomaly-metrics">
-            <Metric label="Observations" value={formatNumber(data.counts.observations)} />
-            <Metric label="Tracked objects" value={formatNumber(data.counts.tracks)} />
-            <Metric
+          <MetricGrid columns={6} label="Intelligence metrics" className="anomaly-metrics-grid">
+            <MetricCard
+              label="Observations"
+              value={formatNumber(data.counts.observations)}
+              hint="persisted rows"
+            />
+            <MetricCard
+              label="Tracked objects"
+              value={formatNumber(data.counts.tracks)}
+              hint="distinct tracks"
+            />
+            <MetricCard
               label="Elevated events"
               value={formatNumber(data.counts.anomalies)}
+              hint="Suspicious + Irregular"
               tone="warn"
             />
-            <Metric
+            <MetricCard
               label="Distinct affected tracks"
               value={formatNumber(data.anomalies.tracks_affected)}
+              hint="carry an event"
             />
-            <Metric
+            <MetricCard
               label="Mean fused score"
               value={formatNumber(data.anomalies.score_mean, 2)}
+              hint="persisted scores"
+              meter={data.anomalies.score_mean}
             />
-            <Metric
+            <MetricCard
               label="Highest fused score"
               value={formatNumber(data.anomalies.score_max, 2)}
+              hint="single event max"
               tone="bad"
+              meter={data.anomalies.score_max}
             />
-          </div>
+          </MetricGrid>
 
           <div className="anomaly-summary-grid">
             <Panel title="Severity distribution" sub="Every persisted observation">
@@ -290,23 +304,6 @@ export function AnomalySummary({
         </>
       )}
     </section>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "warn" | "bad";
-}) {
-  return (
-    <div className={`anomaly-metric ${tone ? `anomaly-metric--${tone}` : ""}`.trim()}>
-      <span className="anomaly-metric__label">{label}</span>
-      <strong className="anomaly-metric__value mono">{value}</strong>
-    </div>
   );
 }
 

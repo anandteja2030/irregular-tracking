@@ -7,11 +7,16 @@ import { useSession } from "../app/SessionProvider";
 import {
   ACCEPTED_EXTENSIONS,
   isActiveState,
+  isTerminalState,
+  stageLabel,
   validateVideoFile,
   type VideoIntakeLimits,
 } from "../lib/studio";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { SectionHeader } from "../components/SectionHeader";
+import { MetricCard, MetricGrid } from "../components/MetricCard";
+import { StatusPill } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { LevelBadge, LevelMeter, Score } from "../components/SessionBits";
 import { StudioIntake, type UploadState } from "../components/StudioIntake";
@@ -30,6 +35,8 @@ import {
 
 const JOB_KEY = "neural-command.job";
 const EMPTY_UPLOAD: UploadState = { status: "idle", record: null, progress: null, error: null };
+
+type FlowState = "done" | "active" | "idle";
 
 function readStoredJob(): string | null {
   try {
@@ -198,6 +205,40 @@ export function VideoStudioPage() {
   const topEvents = (events.data?.anomalies ?? []).slice(0, 5);
   const mediaMissing = detail.data ? !detail.data.media.available : false;
 
+  // Workflow chrome reports only what the intake, job and selection actually hold.
+  const uploadDone = Boolean(upload.record) || Boolean(jobId);
+  const jobTerminal = job ? isTerminalState(job.state) : false;
+  const flow: { id: string; label: string; meta: string; state: FlowState; word: string }[] = [
+    {
+      id: "intake",
+      label: "Intake",
+      meta: upload.record
+        ? upload.record.filename
+        : upload.status === "uploading"
+          ? "Streaming to the API"
+          : upload.status === "error"
+            ? "Upload rejected"
+            : "Awaiting a source",
+      state: upload.status === "uploading" ? "active" : uploadDone ? "done" : "idle",
+      word: upload.status === "uploading" ? "in progress" : uploadDone ? "complete" : "pending",
+    },
+    {
+      id: "analysis",
+      label: "Analysis",
+      meta: job ? stageLabel(job.stage) : jobId ? "Reading job status" : "No job started",
+      state: busy ? "active" : jobTerminal ? "done" : "idle",
+      word: busy ? "in progress" : jobTerminal ? "complete" : "pending",
+    },
+    {
+      id: "inspect",
+      label: "Investigation",
+      meta: selected ? selected.session : "No session selected",
+      state: selectedId ? "active" : "idle",
+      word: selectedId ? "open" : "pending",
+    },
+  ];
+  const currentStep = flow.findIndex((step) => step.state === "active");
+
   return (
     <>
       <PageHeader
@@ -206,19 +247,43 @@ export function VideoStudioPage() {
         lede="Upload a clip or run a bundled sample through the existing engine. Progress, counts and previews below come from the API exactly as reported — no simulated runs, no placeholder metrics."
         aside={
           <>
-            <span className="pill pill--accent">
-              <FilmIcon width={11} height={11} />
+            <StatusPill tone="accent" size="sm" icon={<FilmIcon width={11} height={11} />}>
               {sources.data ? `${sources.data.valid} decodable clips` : "Source scan"}
-            </span>
-            <span className={`pill ${busy ? "pill--warn" : "pill--ok"}`}>
-              <PlayIcon width={11} height={11} />
+            </StatusPill>
+            <StatusPill
+              tone={busy ? "warn" : "ok"}
+              size="sm"
+              icon={<PlayIcon width={11} height={11} />}
+              live
+            >
               {busy ? "Analysis running" : "Engine idle"}
-            </span>
+            </StatusPill>
           </>
         }
       />
 
-      <div className="layout-studio">
+      <ol className="flow" aria-label="Studio workflow">
+        {flow.map((step, index) => (
+          <li
+            key={step.id}
+            className="flow__step"
+            data-state={step.state}
+            aria-current={index === currentStep ? "step" : undefined}
+          >
+            <span className="flow__index mono" aria-hidden="true">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <span className="flow__body">
+              <span className="flow__label">{step.label}</span>
+              <span className="flow__meta mono truncate">{step.meta}</span>
+            </span>
+            <span className="flow__tick" aria-hidden="true" />
+            <span className="sr-only">{step.word}</span>
+          </li>
+        ))}
+      </ol>
+
+      <div className="layout-studio layout-studio--workflow">
         <Panel
           title="Ingest"
           sub="Upload, validate, then start"
@@ -276,13 +341,17 @@ export function VideoStudioPage() {
         />
       </div>
 
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Sample footage</span>
-          <span className="section__meta">
-            {sources.data ? `${sources.data.count} clips in ${sources.data.directory}` : "resolving directory"}
-          </span>
-        </div>
+      <section className="section" aria-labelledby="studio-samples">
+        <SectionHeader
+          title="Sample footage"
+          id="studio-samples"
+          meta={
+            sources.data
+              ? `${sources.data.count} clips in ${sources.data.directory}`
+              : "resolving directory"
+          }
+          level={3}
+        />
         <Panel bodyClassName="panel__body--flush">
           {sources.status === "error" ? (
             <div className="panel__pad">
@@ -329,7 +398,9 @@ export function VideoStudioPage() {
                       Analyse
                     </button>
                   ) : (
-                    <span className="pill pill--bad">unreadable</span>
+                    <StatusPill tone="bad" size="sm">
+                      unreadable
+                    </StatusPill>
                   )}
                 </li>
               ))}
@@ -338,15 +409,17 @@ export function VideoStudioPage() {
         </Panel>
       </section>
 
-      <section className="section" id="studio-results">
-        <div className="section__head">
-          <span className="section__title">Analysis results</span>
-          <span className="section__meta">
-            {selected
+      <section className="section" id="studio-results" aria-labelledby="studio-results-title">
+        <SectionHeader
+          title="Analysis results"
+          id="studio-results-title"
+          meta={
+            selected
               ? `${selected.session} · ${selected.source.label ?? "source unrecorded"}`
-              : "select or run a session"}
-          </span>
-        </div>
+              : "select or run a session"
+          }
+          level={3}
+        />
 
         <div className="layout-studio layout-studio--results">
           <Panel
@@ -367,20 +440,28 @@ export function VideoStudioPage() {
               <LoadingRows rows={5} label="Loading session summary" />
             ) : summary.data ? (
               <div className="stack gap-16">
-                <div className="metric-grid metric-grid--four">
-                  <Metric label="Normal" value={formatNumber(summary.data.counts.levels.Normal)} tone="ok" />
-                  <Metric
+                <MetricGrid columns={4} label="Severity distribution">
+                  <MetricCard
+                    label="Normal"
+                    value={formatNumber(summary.data.counts.levels.Normal)}
+                    tone="ok"
+                  />
+                  <MetricCard
                     label="Suspicious"
                     value={formatNumber(summary.data.counts.levels.Suspicious)}
                     tone="warn"
                   />
-                  <Metric
+                  <MetricCard
                     label="Irregular"
                     value={formatNumber(summary.data.counts.levels.Irregular)}
                     tone="bad"
                   />
-                  <Metric label="Tracks" value={formatNumber(summary.data.counts.tracks)} />
-                </div>
+                  <MetricCard
+                    label="Tracks"
+                    value={formatNumber(summary.data.counts.tracks)}
+                    tone="accent-2"
+                  />
+                </MetricGrid>
 
                 <div className="rows rows--tight">
                   <Row label="Frames processed" value={formatNumber(summary.data.processing.frames_processed)} />
@@ -464,7 +545,10 @@ export function VideoStudioPage() {
             ) : (
               <ul className="evidence-list">
                 {topEvents.map((event) => (
-                  <li key={event.event_id} className="evidence-item">
+                  <li
+                    key={event.event_id}
+                    className={`evidence-item evidence-item--${event.level.toLowerCase()}`}
+                  >
                     <div className="evidence-item__head">
                       <LevelBadge level={event.level} />
                       <span className="mono">F{event.frame}</span>
@@ -492,40 +576,48 @@ export function VideoStudioPage() {
         </div>
       </section>
 
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Video investigation</span>
-          <span className="section__meta">
-            {media.data
+      <section className="section" aria-labelledby="studio-investigation">
+        <SectionHeader
+          title="Video investigation"
+          id="studio-investigation"
+          meta={
+            media.data
               ? `${formatNumber(media.data.preview_count)} retained previews`
-              : "preview frames"}
-          </span>
-        </div>
-        <Panel bodyClassName="panel__body--flush" foot={
-          <>
-            <span className="dot dot--warn" />
-            {media.data
-              ? media.data.annotated_video.reason
-              : "No annotated video is produced by the engine; only retained preview frames exist."}
-          </>
-        }>
-          <FrameInvestigator
-            sessionId={selectedId}
-            media={media}
-            events={events.data?.anomalies ?? null}
-            eventsReady={Boolean(events.data)}
-            eventTotal={events.data?.total ?? 0}
-          />
+              : "preview frames"
+          }
+          level={3}
+        />
+        <Panel
+          className="panel--viewport"
+          bodyClassName="panel__body--flush"
+          foot={
+            <>
+              <span className="dot dot--warn" />
+              {media.data
+                ? media.data.annotated_video.reason
+                : "No annotated video is produced by the engine; only retained preview frames exist."}
+            </>
+          }
+        >
+          <div className="studio-viewport">
+            <FrameInvestigator
+              sessionId={selectedId}
+              media={media}
+              events={events.data?.anomalies ?? null}
+              eventsReady={Boolean(events.data)}
+              eventTotal={events.data?.total ?? 0}
+            />
+          </div>
         </Panel>
       </section>
 
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Session history</span>
-          <span className="section__meta">
-            {sessions.length > 0 ? `${sessions.length} persisted runs` : "persisted runs"}
-          </span>
-        </div>
+      <section className="section" aria-labelledby="studio-history">
+        <SectionHeader
+          title="Session history"
+          id="studio-history"
+          meta={sessions.length > 0 ? `${sessions.length} persisted runs` : "persisted runs"}
+          level={3}
+        />
         <div className="layout-studio layout-studio--history">
           <Panel bodyClassName="panel__body--flush" title="Persisted sessions" sub="Newest first">
             <SessionHistoryPanel sessions={sessions} selectedId={selectedId} onOpen={openSession} />
@@ -581,16 +673,6 @@ export function VideoStudioPage() {
         </div>
       </section>
     </>
-  );
-}
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "ok" | "warn" | "bad" }) {
-  return (
-    <div className="metric-cell">
-      <span className="metric-cell__label">{label}</span>
-      <span className="metric-cell__value">{value}</span>
-      {tone && <span className={`metric-cell__bar metric-cell__bar--${tone}`} />}
-    </div>
   );
 }
 

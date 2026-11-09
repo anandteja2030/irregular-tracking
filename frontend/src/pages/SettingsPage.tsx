@@ -12,6 +12,9 @@ import {
 } from "../lib/settings";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { MetricCard, MetricGrid } from "../components/MetricCard";
+import { SectionHeader } from "../components/SectionHeader";
+import { StatusPill } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { AlertIcon, CpuIcon, FilmIcon, LockIcon, RefreshIcon } from "../components/icons";
 import {
@@ -66,6 +69,15 @@ function configErrorText(error: unknown): string {
   return describeError(error);
 }
 
+function weightSum(draft: SettingsDraft): string {
+  const values = [draft.anomaly.weight_rule, draft.anomaly.weight_ml, draft.anomaly.weight_scene].map(
+    (raw) => (raw.trim() === "" ? null : Number(raw)),
+  );
+  if (values.some((value) => value === null || !Number.isFinite(value))) return "—";
+  const total = values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  return total.toFixed(3);
+}
+
 export function SettingsPage() {
   const health = useApiHealth();
   const config = useResource(api.config);
@@ -101,6 +113,9 @@ export function SettingsPage() {
     !saving &&
     !resetting;
   const canSave = canWrite && dirty && errorCount === 0;
+
+  const sectionErrorCount = (prefix: string) =>
+    Object.keys(errors).filter((key) => key.startsWith(`${prefix}.`)).length;
 
   const refresh = () => {
     health.reload();
@@ -186,7 +201,7 @@ export function SettingsPage() {
       : activeJobs > 0
         ? "Busy"
         : "Ready";
-  const processingTone = activity.error ? "pill--bad" : activeJobs > 0 ? "pill--warn" : "pill--ok";
+  const processingTone = activity.error ? "bad" : activeJobs > 0 ? "warn" : "ok";
 
   return (
     <>
@@ -214,6 +229,13 @@ export function SettingsPage() {
         }
       />
 
+      <SectionHeader
+        title="Runtime health"
+        id="settings-health-title"
+        meta="live polls"
+        description="Health, queue state and worker capacity as reported by the running service."
+      />
+
       <div className="grid-2 settings-health">
         <Panel title="API health" sub="Liveness and runtime">
           {health.status === "error" && !health.data ? (
@@ -226,10 +248,11 @@ export function SettingsPage() {
           ) : health.status === "loading" && !health.data ? (
             <LoadingRows rows={4} label="Checking API health" />
           ) : (
-            <div className="rows rows--tight">
+            <div className="settings-stats">
               <Row
                 label="Health"
                 value={health.data ? `${health.data.status} · version ${health.data.version}` : "—"}
+                beacon
               />
               <Row label="Uptime" value={health.data ? formatUptime(health.data.uptime_s) : "—"} />
               <Row
@@ -254,13 +277,13 @@ export function SettingsPage() {
           )}
         </Panel>
 
-        <Panel title="Processing service" sub="Job manager state from /jobs">
-          <div className="rows rows--tight">
-            <Row label="Service" value={processingLabel} />
-            <Row
-              label="Workers"
-              value={limits ? String(limits.max_workers) : system.status === "error" ? "Unavailable" : "Not exposed"}
-            />
+        <Panel
+          title="Processing service"
+          sub="Job manager state from /jobs"
+          actions={<StatusPill tone={processingTone} dot live>{processingLabel}</StatusPill>}
+        >
+          <div className="settings-stats settings-stats--queue">
+            <Row label="Workers" value={limits ? String(limits.max_workers) : system.status === "error" ? "Unavailable" : "Not exposed"} />
             <Row label="Queued" value={activity.data ? formatNumber(activity.data.queued) : "—"} />
             <Row label="Running" value={activity.data ? formatNumber(activity.data.running) : "—"} />
             <Row
@@ -293,7 +316,7 @@ export function SettingsPage() {
             </p>
           ) : (
             <p className="note-line note-line--wrap">
-              <span className={`dot ${processingTone === "pill--bad" ? "dot--bad" : "dot--warn"}`} />
+              <span className={`dot ${processingTone === "bad" ? "dot--bad" : "dot--warn"}`} />
               {activeJobs} active job{activeJobs === 1 ? "" : "s"} — configuration writes are disabled
               until the queue drains.
             </p>
@@ -301,14 +324,33 @@ export function SettingsPage() {
         </Panel>
       </div>
 
+      <SectionHeader
+        title="Engine configuration"
+        id="settings-config-title"
+        meta={dirty ? "draft differs" : "in sync"}
+        description="Validated in the browser, then re-validated by the API. Values apply only to the running process."
+      />
+
       <div className="layout-split settings-layout">
         <div className="stack gap-18">
           <div className="settings-savebar" aria-live="polite">
             <div className="settings-savebar__state">
-              <span className="mono settings-savebar__label">Engine configuration</span>
+              <span
+                className="settings-savebar__signal"
+                data-dirty={dirty ? "true" : "false"}
+                data-invalid={errorCount > 0 ? "true" : "false"}
+                aria-hidden="true"
+              />
+              <span className="mono settings-savebar__label">Draft state</span>
               <span className={`tag ${dirty ? "tag--inline" : ""}`}>
                 {dirty ? `${errorCount ? "Invalid" : "Unsaved"} changes` : "In sync with process"}
               </span>
+              {errorCount > 0 && (
+                <span className="settings-savebar__errors mono">
+                  {errorCount} field {errorCount === 1 ? "error" : "errors"}
+                </span>
+              )}
+              <span className="settings-savebar__scope mono">process-local</span>
             </div>
             <div className="row-actions">
               <button
@@ -430,7 +472,14 @@ export function SettingsPage() {
             </Panel>
           ) : draft && baseline ? (
             <>
-              <Panel title="Processing" sub="video · preprocess" className="config-section">
+              <Panel
+                title="Processing"
+                sub="video · preprocess"
+                className="config-section"
+                actions={
+                  <SectionTag errorCount={sectionErrorCount("video") + sectionErrorCount("preprocess")} count={7} />
+                }
+              >
                 <div className="settings-field-pair">
                   <ConfigField
                     id="settings-frame-width"
@@ -508,7 +557,12 @@ export function SettingsPage() {
                 </div>
               </Panel>
 
-              <Panel title="Tracking" sub="kalman · hungarian" className="config-section">
+              <Panel
+                title="Tracking"
+                sub="kalman · hungarian"
+                className="config-section"
+                actions={<SectionTag errorCount={sectionErrorCount("tracking")} count={6} />}
+              >
                 <div className="settings-fields">
                   <ConfigField
                     id="settings-max-age"
@@ -575,7 +629,12 @@ export function SettingsPage() {
                 </div>
               </Panel>
 
-              <Panel title="Scene calibration" sub="baseline gates" className="config-section">
+              <Panel
+                title="Scene calibration"
+                sub="baseline gates"
+                className="config-section"
+                actions={<SectionTag errorCount={sectionErrorCount("calibration")} count={4} />}
+              >
                 <div className="settings-fields">
                   <ConfigField
                     id="settings-warmup-tracks"
@@ -622,7 +681,12 @@ export function SettingsPage() {
                 </div>
               </Panel>
 
-              <Panel title="Fusion & severity" sub="anomaly · thresholds · weights" className="config-section">
+              <Panel
+                title="Fusion & severity"
+                sub="anomaly · thresholds · weights"
+                className="config-section"
+                actions={<SectionTag errorCount={sectionErrorCount("anomaly")} count={9} />}
+              >
                 <div className="settings-fields">
                   <ConfigField
                     id="settings-contamination"
@@ -687,7 +751,15 @@ export function SettingsPage() {
                 </div>
                 <div className="settings-subhead">
                   <span className="mono">Fusion weights</span>
-                  <span>must sum to 1.0</span>
+                  <span className="settings-subhead__meta">
+                    must sum to 1.0
+                    <span
+                      className="settings-sum mono"
+                      data-ok={Math.abs(Number(weightSum(draft)) - 1) <= 0.001 ? "true" : "false"}
+                    >
+                      Σ {weightSum(draft)}
+                    </span>
+                  </span>
                 </div>
                 <div className="settings-fields settings-fields--three">
                   <ConfigField
@@ -722,9 +794,9 @@ export function SettingsPage() {
                   />
                 </div>
                 <p className="note-line note-line--wrap">
-                  <span className="dot dot--warn" />
-                  Client checks mirror the API constraints. The backend validates the merged
-                  document and rejects the whole patch if any invariant fails.
+                  <span className="dot dot--warn" /> Client checks mirror the API constraints. The
+                  backend validates the merged document and rejects the whole patch if any invariant
+                  fails.
                 </p>
               </Panel>
 
@@ -751,11 +823,13 @@ export function SettingsPage() {
         </div>
 
         <div className="stack gap-18">
+          <SectionHeader title="Environment & storage" meta="measured" />
+
           <Panel
             title="Upload & job limits"
             sub="reported by /system"
-            actions={<span className={`pill ${system.data?.limits && !system.error ? "pill--accent" : "pill--mono-dim"}`}>
-              {system.error ? "stale" : system.data?.limits ? "measured" : "not exposed"}
+            actions={<span className={`pill ${limits && !system.error ? "pill--accent" : "pill--mono-dim"}`}>
+              {system.error ? "stale" : limits ? "measured" : "not exposed"}
             </span>}
           >
             {system.status === "error" && !system.data ? (
@@ -769,12 +843,29 @@ export function SettingsPage() {
               <LoadingRows rows={4} label="Loading system limits" />
             ) : limits && formats ? (
               <div className="stack gap-14">
-                <div className="rows rows--tight">
-                  <Row label="Upload cap" value={formatBytes(limits.max_upload_bytes)} />
-                  <Row label="Upload retention" value={formatDuration(limits.upload_ttl_s)} />
-                  <Row label="Max workers" value={formatNumber(limits.max_workers)} />
-                  <Row label="Frame cap" value={formatNumber(limits.max_frames_cap)} />
-                </div>
+                <MetricGrid columns={2} label="Upload and job limits" className="settings-limits">
+                  <MetricCard
+                    label="Upload cap"
+                    value={formatBytes(limits.max_upload_bytes)}
+                    tone="accent"
+                    hint="largest accepted upload"
+                  />
+                  <MetricCard
+                    label="Upload retention"
+                    value={formatDuration(limits.upload_ttl_s)}
+                    hint="uploads expire after"
+                  />
+                  <MetricCard
+                    label="Max workers"
+                    value={formatNumber(limits.max_workers)}
+                    hint="parallel analyses"
+                  />
+                  <MetricCard
+                    label="Frame cap"
+                    value={formatNumber(limits.max_frames_cap)}
+                    hint="per video decode"
+                  />
+                </MetricGrid>
                 <div>
                   <span className="settings-mini-label mono">Accepted formats</span>
                   <div className="cluster settings-formats">
@@ -782,8 +873,17 @@ export function SettingsPage() {
                       <span className="tag" key={extension}>{extension}</span>
                     ))}
                   </div>
+                  {formats.mime_types.length > 0 && (
+                    <p className="settings-mime mono">
+                      {formats.mime_types.join(" · ")}
+                    </p>
+                  )}
                 </div>
                 <p className="note-line">Values are the current API runtime limits, not editor defaults.</p>
+                <p className="note-line note-line--wrap">
+                  <span className="dot dot--warn" /> Uploads above the cap are rejected by the API
+                  before decoding; the console never guesses a limit.
+                </p>
                 {Boolean(system.error) && (
                   <p className="note-line note-line--wrap">
                     <span className="dot dot--bad" /> The latest /system read failed; these limits are
@@ -850,7 +950,7 @@ export function SettingsPage() {
               <LoadingRows rows={5} label="Loading runtime status" />
             ) : system.data ? (
               <div className="stack gap-14">
-                <div className="rows rows--tight">
+                <div className="settings-stats">
                   <Row label="Python" value={`${system.data.python_implementation} ${system.data.python}`} />
                   <Row label="Platform" value={truncateMiddle(system.data.platform, 31)} />
                   <Row label="PID" value={formatNumber(system.data.runtime.pid)} />
@@ -858,9 +958,33 @@ export function SettingsPage() {
                     label="Dependencies"
                     value={`${Object.values(system.data.packages).filter(Boolean).length} / ${Object.keys(system.data.packages).length} present`}
                   />
-                  <Row label="Database" value={formatBytes(system.data.storage.db.bytes)} />
-                  <Row label="Samples" value={`${formatNumber(system.data.storage.samples.videos)} · ${formatBytes(system.data.storage.samples.bytes)}`} />
-                  <Row label="Output files" value={`${formatNumber(system.data.storage.output.files)} · ${formatBytes(system.data.storage.output.bytes)}`} />
+                </div>
+                <div>
+                  <span className="settings-mini-label mono">Storage footprint</span>
+                  <MetricGrid columns={3} label="Storage footprint" className="settings-storage">
+                    <MetricCard
+                      label="Database"
+                      value={formatBytes(system.data.storage.db.bytes)}
+                      hint="sqlite file"
+                    />
+                    <MetricCard
+                      label="Samples"
+                      value={formatBytes(system.data.storage.samples.bytes)}
+                      hint={`${formatNumber(system.data.storage.samples.videos)} videos`}
+                    />
+                    <MetricCard
+                      label="Output"
+                      value={formatBytes(system.data.storage.output.bytes)}
+                      hint={`${formatNumber(system.data.storage.output.files)} files`}
+                    />
+                  </MetricGrid>
+                </div>
+                <div className="rows rows--tight">
+                  <Row
+                    label="Executable"
+                    value={truncateMiddle(system.data.runtime.executable, 32)}
+                    title={system.data.runtime.executable}
+                  />
                 </div>
                 <p className="note-line note-line--wrap">
                   <span className={`dot ${system.error ? "dot--bad" : "dot--live"}`} />
@@ -910,6 +1034,17 @@ export function SettingsPage() {
   );
 }
 
+function SectionTag({ count, errorCount }: { count: number; errorCount: number }) {
+  if (errorCount > 0) {
+    return (
+      <span className="tag tag--danger mono">
+        {errorCount} {errorCount === 1 ? "error" : "errors"}
+      </span>
+    );
+  }
+  return <span className="tag mono">{count} fields</span>;
+}
+
 function ConfigField({
   id,
   label,
@@ -936,6 +1071,7 @@ function ConfigField({
   hint?: string;
 }) {
   const helpId = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+  const range = min !== undefined && max !== undefined ? `${min}–${max}` : undefined;
   return (
     <label className={`settings-field ${error ? "has-error" : ""}`.trim()} htmlFor={id}>
       <span className="settings-field__label">{label}</span>
@@ -954,6 +1090,7 @@ function ConfigField({
           onChange={(event) => onChange(event.target.value)}
           aria-invalid={error ? true : undefined}
           aria-describedby={helpId}
+          title={range ? `Accepted range ${range}` : undefined}
         />
         {suffix && <span className="settings-field__suffix mono">{suffix}</span>}
       </span>
@@ -968,11 +1105,24 @@ function ConfigField({
   );
 }
 
-function Row({ label, value, title }: { label: string; value: string; title?: string }) {
+function Row({
+  label,
+  value,
+  title,
+  beacon,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  beacon?: boolean;
+}) {
   return (
-    <div className="row">
+    <div className={`row ${beacon ? "row--beacon" : ""}`.trim()}>
       <span className="row__key">{label}</span>
-      <span className="row__value" title={title}>{value}</span>
+      <span className="row__value" title={title}>
+        {beacon && <span className="settings-beacon" aria-hidden="true" />}
+        {value}
+      </span>
     </div>
   );
 }

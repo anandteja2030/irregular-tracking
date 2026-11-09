@@ -3,6 +3,7 @@ import type { DirectionSummary } from "../lib/tracks";
 import { formatTrackId } from "../lib/tracks";
 import { formatDuration, formatNumber } from "../lib/format";
 import { LevelBadge, LevelMeter, Score } from "./SessionBits";
+import { MetricCard, MetricGrid } from "./MetricCard";
 
 interface TrackTelemetryProps {
   detail: TrackDetail;
@@ -21,14 +22,20 @@ export function TrackTelemetry({ detail, directions, fps }: TrackTelemetryProps)
 
   return (
     <div className="stack gap-14">
-      <div className="telemetry-counts">
+      <MetricGrid columns={3} label="Observation levels" className="telemetry-levels">
         {levels.map((entry) => (
-          <div className="telemetry-count" key={entry.level}>
-            <span className="telemetry-count__value mono">{formatNumber(entry.count)}</span>
-            <LevelBadge level={entry.level} />
-          </div>
+          <MetricCard
+            key={entry.level}
+            label={entry.level}
+            value={formatNumber(entry.count)}
+            hint="observations"
+            tone={entry.level === "Normal" ? "ok" : entry.level === "Suspicious" ? "warn" : "bad"}
+            meter={
+              observed.observations > 0 ? entry.count / observed.observations : null
+            }
+          />
         ))}
-      </div>
+      </MetricGrid>
       <LevelMeter levels={observed.levels} />
 
       <div className="rows rows--tight">

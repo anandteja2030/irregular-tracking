@@ -7,6 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { LevelBadge, Pager, Score } from "../components/SessionBits";
+import { StatusPill } from "../components/StatusPill";
 import { TrackIndex } from "../components/TrackIndex";
 import { TrackTelemetry } from "../components/TrackTelemetry";
 import { TrackAnomalies } from "../components/TrackAnomalies";
@@ -74,6 +75,7 @@ export function TrackExplorerPage() {
     pickedTrack !== null && visibleTracks.some((track) => track.track_id === pickedTrack)
       ? pickedTrack
       : (visibleTracks[0]?.track_id ?? null);
+  const activeTrack = visibleTracks.find((track) => track.track_id === activeId) ?? null;
   const noTracksAtAll =
     tracks.status === "ready" &&
     tracks.data?.total === 0 &&
@@ -312,7 +314,7 @@ export function TrackExplorerPage() {
           />
         </Panel>
       ) : (
-        <div className="layout-main-aside">
+        <div className="layout-main-aside track-workspace">
           <div className="stack gap-14">
             {activeId === null ? (
               <Panel title="Track workspace" sub={tracks.status === "loading" ? "Loading tracks" : "No selection"}>
@@ -334,6 +336,51 @@ export function TrackExplorerPage() {
               </Panel>
             ) : (
               <>
+                <section className="track-deck" aria-labelledby="track-identity">
+                  <div className="track-deck__lead">
+                    <span className="mini-label">Selected object</span>
+                    <h2 className="track-deck__id mono" id="track-identity">
+                      {formatTrackId(activeId)}
+                    </h2>
+                    <div className="track-deck__badges">
+                      <LevelBadge level={activeTrack?.observed.worst_level ?? null} />
+                      <StatusPill tone="muted" size="sm">
+                        {activeTrack?.appearance.color ?? "colour not reported"}
+                        {activeTrack?.appearance.shape
+                          ? ` · ${activeTrack.appearance.shape}`
+                          : ""}
+                      </StatusPill>
+                    </div>
+                  </div>
+                  <dl className="track-deck__facts">
+                    <div>
+                      <dt>Observations</dt>
+                      <dd className="mono">
+                        {formatNumber(activeTrack?.observed.observations)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Elevated events</dt>
+                      <dd className="mono">{formatNumber(activeTrack?.observed.anomalies)}</dd>
+                    </div>
+                    <div>
+                      <dt>Lifecycle</dt>
+                      <dd className="mono">
+                        F{activeTrack?.frames.first ?? "—"}–F{activeTrack?.frames.last ?? "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Max speed</dt>
+                      <dd className="mono">
+                        {activeTrack?.motion.max_speed_px_s === null ||
+                        activeTrack?.motion.max_speed_px_s === undefined
+                          ? "—"
+                          : `${activeTrack.motion.max_speed_px_s.toFixed(0)} px/s`}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+
                 <Panel
                   title="Trajectory canvas"
                   sub={`${width} × ${height} · source-frame coordinates`}
@@ -562,22 +609,24 @@ export function TrackExplorerPage() {
                       </>
                     }
                   >
-                    <FrameInvestigator
-                      sessionId={selectedId}
-                      media={scopedMedia}
-                      events={anomalies.data?.anomalies ?? null}
-                      eventsReady={Boolean(anomalies.data) || anomalies.status === "error"}
-                      eventsError={anomalies.status === "error"}
-                      eventTotal={anomalies.data?.total ?? 0}
-                      focusFrame={focusFrame}
-                    />
+                    <div className="cinema">
+                      <FrameInvestigator
+                        sessionId={selectedId}
+                        media={scopedMedia}
+                        events={anomalies.data?.anomalies ?? null}
+                        eventsReady={Boolean(anomalies.data) || anomalies.status === "error"}
+                        eventsError={anomalies.status === "error"}
+                        eventTotal={anomalies.data?.total ?? 0}
+                        focusFrame={focusFrame}
+                      />
+                    </div>
                   </Panel>
                 </section>
               </>
             )}
           </div>
 
-          <div className="stack gap-14">
+          <div className="stack gap-14 track-workspace__rail">
             <Panel
               title="Track index"
               sub={tracks.data ? `${formatNumber(tracks.data.total)} objects · measured` : "objects in session"}

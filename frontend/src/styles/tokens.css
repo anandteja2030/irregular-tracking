@@ -1,70 +1,209 @@
-/* Design tokens: layered surfaces, restrained indigo/electric accents. */
+/* Design tokens — NEURAL COMMAND command-center foundation.
+ *
+ * Phase 13.1 adds a semantic layer (surfaces, text, accents, borders, spacing,
+ * type, elevation, chart, layering) on top of the original palette. Every legacy
+ * token name is retained and re-aliased onto the new layer, so existing pages
+ * and components keep resolving unchanged while they migrate in later phases.
+ *
+ * The text ramp is measured against --surface-2 (#101321), the lightest opaque
+ * panel. Every step clears 4.5:1 there, so body copy, captions and mono labels
+ * all meet AA regardless of which surface they sit on.
+ */
 :root {
   color-scheme: dark;
 
-  /* Depth stack */
-  --void: #040508;
-  --deep: #07080d;
-  --raise-1: #0b0d14;
-  --raise-2: #101321;
+  /* ---------------------------------------------------------------- depth */
+  --void: #040508; /* app canvas */
+  --deep: #07080d; /* chrome canvas */
+  --raise-1: #0b0d14; /* wells, table stripes, inputs */
+  --raise-2: #101321; /* panels, cards */
+  --raise-3: #151a2b; /* hover, selected, popovers */
 
-  /* Ink */
+  --surface-canvas: var(--void);
+  --surface-chrome: var(--deep);
+  --surface-1: var(--raise-1);
+  --surface-2: var(--raise-2);
+  --surface-3: var(--raise-3);
+  --surface-overlay: rgba(8, 10, 18, 0.78);
+
+  /* ------------------------------------------------------------------ ink */
   --ink-100: #f3f5fb;
   --ink-80: #d3d8e6;
-  --ink-60: #a2a9bd;
-  --ink-45: #7d8499;
-  --ink-30: #5b6275;
-  --ink-18: #3a4053;
+  --ink-60: #b6bed3;
+  --ink-45: #9ea6bb;
+  --ink-30: #8a92a7;
+  --ink-18: #7d8499;
 
-  /* Lines */
+  --text-primary: var(--ink-100);
+  --text-strong: var(--ink-80);
+  --text-secondary: var(--ink-60);
+  --text-tertiary: var(--ink-45);
+  --text-muted: var(--ink-30);
+  --text-faint: var(--ink-18);
+  --text-on-accent: #04121a;
+
+  /* ---------------------------------------------------------------- lines */
   --hairline: rgba(255, 255, 255, 0.065);
   --hairline-2: rgba(255, 255, 255, 0.1);
   --hairline-3: rgba(255, 255, 255, 0.16);
 
-  /* Glass */
+  --border-subtle: var(--hairline);
+  --border-default: var(--hairline-2);
+  --border-strong: var(--hairline-3);
+  --border-accent: rgba(79, 227, 255, 0.34);
+  --border-accent-2: rgba(112, 123, 255, 0.34);
+
+  /* ---------------------------------------------------------------- glass */
   --glass: rgba(15, 17, 25, 0.66);
   --glass-soft: rgba(17, 20, 30, 0.42);
   --glass-strong: rgba(20, 23, 34, 0.86);
   --glass-blur: blur(22px) saturate(135%);
+  --glass-border: rgba(255, 255, 255, 0.085);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
 
-  /* Accents */
-  --indigo: #707bff;
-  --indigo-bright: #97a0ff;
-  --indigo-dim: rgba(112, 123, 255, 0.14);
-  --electric: #4fe3ff;
-  --electric-dim: rgba(79, 227, 255, 0.12);
+  /* -------------------------------------------------------------- accents */
+  /* Cyan is the primary accent, electric blue the secondary. */
+  --accent: #4fe3ff;
+  --accent-rgb: 79, 227, 255;
+  --accent-bright: #93efff;
+  --accent-dim: rgba(79, 227, 255, 0.12);
+  --accent-soft: rgba(79, 227, 255, 0.2);
+  --accent-line: rgba(79, 227, 255, 0.34);
+
+  --accent-2: #707bff;
+  --accent-2-rgb: 112, 123, 255;
+  --accent-2-bright: #97a0ff;
+  --accent-2-dim: rgba(112, 123, 255, 0.14);
+  --accent-2-line: rgba(112, 123, 255, 0.34);
+
+  /* Legacy accent names, re-aliased so indigo-based surfaces stay consistent
+     with the secondary accent until they migrate to --accent in later phases. */
+  --indigo: var(--accent-2);
+  --indigo-bright: var(--accent-2-bright);
+  --indigo-dim: var(--accent-2-dim);
+  --electric: var(--accent);
+  --electric-dim: var(--accent-dim);
+
+  /* --------------------------------------------------------------- status */
   --ok: #46dda6;
   --warn: #ffc46b;
   --bad: #ff6485;
+  --ok-rgb: 70, 221, 166;
+  --warn-rgb: 255, 196, 107;
+  --bad-rgb: 255, 100, 133;
 
-  /* Type */
+  /* ----------------------------------------------------------------- type */
   --sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace,
     "SF Mono", Menlo, Consolas, monospace;
 
-  /* Geometry */
+  --type-3xs: 9px;
+  --type-2xs: 10px;
+  --type-xs: 11px;
+  --type-sm: 12px;
+  --type-md: 14px;
+  --type-lg: 16px;
+  --type-xl: 20px;
+  --type-2xl: 26px;
+  --type-3xl: 34px;
+
+  /* Uppercase mono labels should never drop below --type-label. */
+  --type-label: var(--type-xs);
+  --type-body: var(--type-md);
+
+  --leading-tight: 1.16;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
+
+  --tracking-tight: -0.022em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.06em;
+  --tracking-label: 0.19em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 560;
+  --weight-bold: 650;
+
+  /* ---------------------------------------------------------------- space */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  --gap-inline: var(--space-2);
+  --gap-row: var(--space-3);
+  --gap-stack: var(--space-4);
+  --gap-section: var(--space-6);
+  --pad-control: var(--space-3);
+  --pad-panel: var(--space-5);
+  --pad-section: var(--space-6);
+
+  /* ------------------------------------------------------------- geometry */
   --r-xs: 7px;
   --r-sm: 10px;
   --r-md: 14px;
   --r-lg: 18px;
+  --r-pill: 999px;
   --rail-w: 252px;
   --rail-w-compact: 76px;
   --topbar-h: 62px;
 
-  /* Elevation */
+  /* ------------------------------------------------------------ elevation */
   --shadow-panel: 0 30px 70px -46px rgba(0, 0, 0, 0.95),
     inset 0 1px 0 rgba(255, 255, 255, 0.045);
   --shadow-float: 0 18px 48px -20px rgba(0, 0, 0, 0.8);
+  --shadow-1: 0 8px 24px -18px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-2: 0 18px 44px -28px rgba(0, 0, 0, 0.92),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --shadow-3: var(--shadow-panel);
   --glow-accent: 0 0 0 1px rgba(112, 123, 255, 0.32),
     0 12px 36px -16px rgba(112, 123, 255, 0.55);
+  --glow-cyan: 0 0 0 1px rgba(79, 227, 255, 0.3),
+    0 12px 36px -18px rgba(79, 227, 255, 0.4);
+  --glow-soft: 0 8px 28px -20px rgba(79, 227, 255, 0.35);
 
-  /* Motion */
+  /* ---------------------------------------------------------------- chart */
+  --chart-1: #4fe3ff;
+  --chart-2: #7b86ff;
+  --chart-3: #46dda6;
+  --chart-4: #ffc46b;
+  --chart-5: #ff6485;
+  --chart-6: #c084fc;
+  --chart-grid: rgba(255, 255, 255, 0.07);
+  --chart-axis: rgba(255, 255, 255, 0.14);
+  --chart-track: rgba(255, 255, 255, 0.08);
+
+  /* ------------------------------------------------------------- layering */
+  --z-rail: 20;
+  --z-topbar: 30;
+  --z-overlay: 60;
+  --z-palette: 70;
+  --z-toast: 80;
+
+  /* --------------------------------------------------------------- motion */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
   --fast: 140ms;
   --base: 260ms;
   --slow: 480ms;
+  --duration-fast: var(--fast);
+  --duration-base: var(--base);
+  --duration-slow: var(--slow);
+
+  /* --------------------------------------------------------------- focus */
+  --focus-ring: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -14,15 +14,17 @@ body,
 
 html {
   -webkit-text-size-adjust: 100%;
+  accent-color: var(--accent);
 }
 
 body {
   margin: 0;
-  background: var(--void);
-  color: var(--ink-60);
+  background: var(--surface-canvas);
+  color: var(--text-secondary);
   font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: var(--type-body);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -42,10 +44,10 @@ h1,
 h2,
 h3,
 h4 {
-  color: var(--ink-100);
-  font-weight: 560;
-  letter-spacing: -0.022em;
-  line-height: 1.18;
+  color: var(--text-primary);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
 }
 
 a {
@@ -67,6 +69,12 @@ input {
   color: inherit;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
 ul {
   margin: 0;
   padding: 0;
@@ -74,13 +82,13 @@ ul {
 }
 
 ::selection {
-  background: rgba(112, 123, 255, 0.35);
-  color: var(--ink-100);
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 :focus-visible {
-  outline: 2px solid rgba(112, 123, 255, 0.75);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
   border-radius: var(--r-xs);
 }
 
@@ -103,7 +111,7 @@ ul {
   background: rgba(255, 255, 255, 0.1);
   border: 2px solid transparent;
   background-clip: content-box;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
 }
 
 *::-webkit-scrollbar-thumb:hover {
@@ -119,11 +127,12 @@ ul {
 
 .eyebrow {
   font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.19em;
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  line-height: var(--leading-snug);
   text-transform: uppercase;
-  color: var(--ink-30);
+  color: var(--text-muted);
 }
 
 .tabular {
@@ -147,4 +156,21 @@ ul {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Phase 13.8 motion safety net: the individual reduced-motion blocks cover the
+ * animated surfaces that existed when they were written, but any transition or
+ * keyframe added later would slip through. This collapses every animation and
+ * transition for users who ask for reduced motion, whatever the component. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0s !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }

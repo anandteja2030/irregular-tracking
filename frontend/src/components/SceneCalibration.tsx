@@ -1,8 +1,10 @@
 import type { ResourceState } from "../hooks/useResource";
 import type { EngineConfig, SceneResponse } from "../lib/types";
-import { assessCalibration } from "../lib/scene";
+import { assessCalibration, type CalibrationState } from "../lib/scene";
 import { formatNumber } from "../lib/format";
+import { MetricCard, MetricGrid } from "./MetricCard";
 import { Panel } from "./Panel";
+import { StatusPill, type StatusTone } from "./StatusPill";
 import { LoadingRows } from "./StateViews";
 
 interface SceneCalibrationProps {
@@ -18,6 +20,20 @@ function sourceLabel(source: string): string {
   return source.replaceAll("_", " ");
 }
 
+const STATE_TONE: Record<CalibrationState, StatusTone> = {
+  ready: "ok",
+  warming: "warn",
+  historical: "warn",
+  unavailable: "muted",
+};
+
+const STATE_LABEL: Record<CalibrationState, string> = {
+  ready: "Ready",
+  warming: "Not ready",
+  historical: "Historical",
+  unavailable: "Unavailable",
+};
+
 export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
   const thresholds = config.data?.calibration ?? null;
   const assessment = assessCalibration(scene, thresholds);
@@ -25,6 +41,8 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
   const isHistorical = assessment.state === "historical";
   const isWarming = assessment.state === "warming";
   const isReady = assessment.state === "ready";
+  const coveragePct =
+    assessment.coverage === null ? null : Math.round(assessment.coverage * 100);
 
   return (
     <Panel
@@ -39,80 +57,100 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
       }
     >
       <div className="scene-calibration">
-        <div className={`scene-status scene-status--${assessment.state}`}>
-          <span
-            className={`scene-status__dot ${
-              isReady ? "is-ready" : isHistorical || isWarming ? "is-warn" : "is-muted"
-            }`}
-            aria-hidden="true"
-          />
-          <div className="scene-status__text">
-            <strong>{assessment.title}</strong>
-            <span>
-              {calibration.available
-                ? `${calibration.ready ? "Readiness gates met" : "Readiness gates not met"} · ${formatNumber(
-                    calibration.samples ?? 0,
-                  )} samples`
-                : isHistorical
-                  ? "The calibrator artifact was not persisted for this session."
-                  : "The API returned no calibration artifact."}
+        <div className="calibration-hero" data-state={assessment.state}>
+          <div className="calibration-hero__identity">
+            <span
+              className={`calibration-hero__pulse ${
+                isReady ? "is-ready" : isHistorical || isWarming ? "is-warn" : "is-muted"
+              }`}
+              aria-hidden="true"
+            />
+            <div className="calibration-hero__copy">
+              <div className="calibration-hero__title">
+                <StatusPill tone={STATE_TONE[assessment.state]} dot size="sm">
+                  {STATE_LABEL[assessment.state]}
+                </StatusPill>
+                <strong>{assessment.title}</strong>
+              </div>
+              <span className="calibration-hero__detail">
+                {calibration.available
+                  ? `${calibration.ready ? "Readiness gates met" : "Readiness gates not met"} · ${formatNumber(
+                      calibration.samples ?? 0,
+                    )} samples`
+                  : isHistorical
+                    ? "The calibrator artifact was not persisted for this session."
+                    : "The API returned no calibration artifact."}
+              </span>
+            </div>
+            <span className="tag calibration-hero__artifact">
+              {calibration.available ? "in-process artifact" : "not retained"}
             </span>
           </div>
-          <span className="tag">
-            {calibration.available ? "in-process artifact" : "not retained"}
-          </span>
+
+          <div className="calibration-hero__coverage">
+            <span className="mini-label">Readiness coverage</span>
+            <strong className="mono">
+              {coveragePct === null ? "—" : `${coveragePct}%`}
+            </strong>
+            <span className="calibration-hero__caption">
+              {isWarming && assessment.limiting
+                ? `Limiting gate · ${assessment.limiting.label}`
+                : "Narrowest readiness gate"}
+            </span>
+          </div>
         </div>
 
-        <div className="scene-metrics">
-          <div className="scene-metric">
-            <span className="scene-metric__label">Movement samples</span>
-            <strong className="scene-metric__value mono">
-              {calibration.samples === null ? "—" : formatNumber(calibration.samples)}
-            </strong>
-          </div>
-          <div className="scene-metric">
-            <span className="scene-metric__label">Contributing tracks</span>
-            <strong className="scene-metric__value mono">
-              {calibration.tracks === null ? "—" : formatNumber(calibration.tracks)}
-            </strong>
-          </div>
-          <div className="scene-metric">
-            <span className="scene-metric__label">Observed seconds</span>
-            <strong className="scene-metric__value mono">
-              {calibration.observed_seconds === null
+        <MetricGrid columns={3} label="Calibration evidence" className="scene-evidence">
+          <MetricCard
+            label="Movement samples"
+            value={calibration.samples === null ? "—" : formatNumber(calibration.samples)}
+            hint={thresholds ? `gate ≥ ${formatNumber(thresholds.min_samples)}` : undefined}
+            tone="accent"
+          />
+          <MetricCard
+            label="Contributing tracks"
+            value={calibration.tracks === null ? "—" : formatNumber(calibration.tracks)}
+            hint={thresholds ? `gate ≥ ${formatNumber(thresholds.warmup_tracks)}` : undefined}
+            tone="accent"
+          />
+          <MetricCard
+            label="Observed seconds"
+            value={
+              calibration.observed_seconds === null
                 ? "—"
-                : `${formatNumber(calibration.observed_seconds, 1)} s`}
-            </strong>
-          </div>
-          <div className="scene-metric">
-            <span className="scene-metric__label">Readiness coverage</span>
-            <strong className="scene-metric__value mono">
-              {assessment.coverage === null
-                ? "—"
-                : `${Math.round(assessment.coverage * 100)}%`}
-            </strong>
-          </div>
-        </div>
+                : `${formatNumber(calibration.observed_seconds, 1)} s`
+            }
+            hint={thresholds ? `gate ≥ ${formatNumber(thresholds.tracks_seconds, 0)} s` : undefined}
+            tone="accent"
+          />
+        </MetricGrid>
 
         {calibration.available && assessment.gates.length > 0 && (
-          <div className="scene-gates">
+          <div className="scene-gates" role="list" aria-label="Readiness gates">
             {assessment.gates.map((gate) => (
-              <div className="scene-gate" key={gate.key}>
+              <div
+                className={`scene-gate ${gate.met ? "is-met" : ""}`.trim()}
+                key={gate.key}
+                role="listitem"
+                data-met={gate.met}
+              >
                 <div className="scene-gate__head">
-                  <span>{gate.label}</span>
-                  <span className="mono">
-                    {gate.actual === null ? "—" : formatNumber(gate.actual, gate.key === "seconds" ? 1 : 0)}{" "}
+                  <span className="scene-gate__label">{gate.label}</span>
+                  <span className="scene-gate__reading mono">
+                    {gate.actual === null
+                      ? "—"
+                      : formatNumber(gate.actual, gate.key === "seconds" ? 1 : 0)}{" "}
                     / {formatNumber(gate.required, gate.key === "seconds" ? 1 : 0)}
                   </span>
                 </div>
-                <div
-                  className={`scene-gate__track ${gate.met ? "is-met" : ""}`.trim()}
-                  aria-hidden="true"
-                >
+                <div className="scene-gate__track" aria-hidden="true">
                   <span
                     className="scene-gate__fill"
                     style={{ width: `${(gate.coverage ?? 0) * 100}%` }}
                   />
+                </div>
+                <div className="scene-gate__state mono">
+                  <span>{gate.met ? "met" : "below gate"}</span>
                 </div>
               </div>
             ))}

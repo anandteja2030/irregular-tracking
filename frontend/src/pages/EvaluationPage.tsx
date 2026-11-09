@@ -6,6 +6,9 @@ import type { SessionDownloadKind } from "../lib/api";
 import { useResource } from "../hooks/useResource";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { MetricCard, MetricGrid } from "../components/MetricCard";
+import { SectionHeader } from "../components/SectionHeader";
+import { StatusPill, type StatusTone } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import {
   AlertIcon,
@@ -60,6 +63,13 @@ const DOWNLOAD_META: Record<
   },
 };
 
+const MATRIX_LEGEND: { code: string; name: string; detail: string; tone: string }[] = [
+  { code: "TP", name: "True positive", detail: "predicted anomaly · labelled anomaly", tone: "tp" },
+  { code: "FP", name: "False positive", detail: "predicted anomaly · labelled normal", tone: "fp" },
+  { code: "FN", name: "False negative", detail: "predicted normal · labelled anomaly", tone: "fn" },
+  { code: "TN", name: "True negative", detail: "predicted normal · labelled normal", tone: "tn" },
+];
+
 function triggerDownload(blob: Blob, filename: string) {
   if (typeof URL.createObjectURL !== "function") return;
   const url = URL.createObjectURL(blob);
@@ -79,6 +89,87 @@ function downloadMessage(kind: SessionDownloadKind, file: { blob: Blob; rowCount
   if (file.rowCount === 0) return "Downloaded header-only CSV · 0 rows";
   if (file.rowCount !== null) return `Downloaded ${formatNumber(file.rowCount)} rows · ${size}`;
   return `Downloaded CSV · ${size}`;
+}
+
+/** Readiness band shown above any evaluation payload, whatever its state. */
+function ReadinessHero({
+  tone,
+  title,
+  detail,
+  matched,
+  total,
+  coverage,
+}: {
+  tone: "ok" | "warn" | "bad" | "muted";
+  title: string;
+  detail: string;
+  matched: number | null | undefined;
+  total: number | null | undefined;
+  coverage: number | null | undefined;
+}) {
+  const share =
+    coverage === null || coverage === undefined || !Number.isFinite(coverage)
+      ? null
+      : Math.min(100, Math.max(0, coverage * 100));
+  return (
+    <div className="eval-hero" data-tone={tone}>
+      <span className="eval-hero__pulse" aria-hidden="true" />
+      <div className="eval-hero__copy">
+        <span className="eval-hero__eyebrow mono">Evaluation readiness</span>
+        <p className="eval-hero__title">{title}</p>
+        <p className="eval-hero__detail">{detail}</p>
+      </div>
+      <div className="eval-hero__coverage">
+        <span className="eval-hero__coverage-value mono">
+          {formatNumber(matched)}
+          <span className="eval-hero__coverage-total"> / {formatNumber(total)}</span>
+        </span>
+        <span className="eval-hero__coverage-label mono">labels matched</span>
+        <span className="eval-hero__coverage-bar" aria-hidden="true">
+          {share !== null && <span style={{ width: `${share}%` }} />}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Normal/Anomaly share of whatever labels the API actually reported. */
+function ClassBalance({
+  normal,
+  anomaly,
+}: {
+  normal: number | null | undefined;
+  anomaly: number | null | undefined;
+}) {
+  const n = normal ?? 0;
+  const a = anomaly ?? 0;
+  const total = n + a;
+  const normalShare = total > 0 ? (n / total) * 100 : 0;
+  return (
+    <div className="eval-balance">
+      <div className="eval-balance__bar" aria-hidden="true">
+        {total > 0 ? (
+          <>
+            <span className="eval-balance__fill eval-balance__fill--normal" style={{ width: `${normalShare}%` }} />
+            <span className="eval-balance__fill eval-balance__fill--anomaly" style={{ width: `${100 - normalShare}%` }} />
+          </>
+        ) : (
+          <span className="eval-balance__empty" />
+        )}
+      </div>
+      <div className="eval-balance__legend mono">
+        <span className="eval-balance__key">
+          <span className="eval-balance__swatch eval-balance__swatch--normal" aria-hidden="true" />
+          Normal {formatNumber(normal)}
+        </span>
+        <span className="eval-balance__key">
+          <span className="eval-balance__swatch eval-balance__swatch--anomaly" aria-hidden="true" />
+          Anomaly {formatNumber(anomaly)}
+        </span>
+        <span className="dim">{total > 0 ? "share of stored labels" : "no labels stored"}</span>
+      </div>
+    </div>
+  );
 }
 
 export function EvaluationPage() {
@@ -113,11 +204,11 @@ export function EvaluationPage() {
     () =>
       metrics
         ? [
-            { label: "Accuracy", value: metrics.accuracy },
-            { label: "Precision", value: metrics.precision },
-            { label: "Recall", value: metrics.recall },
-            { label: "F1 score", value: metrics.f1 },
-            { label: "False positive rate", value: metrics.fpr },
+            { label: "Accuracy", value: metrics.accuracy, hint: "correct of matched labels", tone: "accent" as const },
+            { label: "Precision", value: metrics.precision, hint: "TP / predicted positive", tone: "neutral" as const },
+            { label: "Recall", value: metrics.recall, hint: "TP / labelled anomaly", tone: "neutral" as const },
+            { label: "F1 score", value: metrics.f1, hint: "harmonic mean of precision and recall", tone: "accent-2" as const },
+            { label: "False positive rate", value: metrics.fpr, hint: "FP / labelled normal", tone: "warn" as const },
           ]
         : [],
     [metrics],
@@ -151,23 +242,23 @@ export function EvaluationPage() {
     }
   }
 
-  const pill =
+  const pill: { tone: StatusTone; label: string } =
     evaluation.status === "error"
-      ? { className: "pill--bad", label: "Evaluation unavailable" }
+      ? { tone: "bad", label: "Evaluation unavailable" }
       : !selectedId
-        ? { className: "pill--mono-dim", label: "No session" }
+        ? { tone: "muted", label: "No session" }
         : !data
-          ? { className: "pill--mono-dim", label: "Reading evaluation" }
+          ? { tone: "muted", label: "Reading evaluation" }
           : state === "ready"
             ? {
-                className: "pill--accent",
+                tone: "accent",
                 label: `${formatNumber(data.labeled_observations)} labeled`,
               }
             : state === "no_labels"
-              ? { className: "pill--mono-dim", label: "Labels required" }
+              ? { tone: "muted", label: "Labels required" }
               : state === "insufficient"
-                ? { className: "pill--warn", label: "Insufficient classes" }
-                : { className: "pill--warn", label: "Metrics unavailable" };
+                ? { tone: "warn", label: "Insufficient classes" }
+                : { tone: "warn", label: "Metrics unavailable" };
 
   let evaluationBody: React.ReactNode;
   if (!selectedId) {
@@ -189,8 +280,10 @@ export function EvaluationPage() {
         />
         <p className="note-line note-line--wrap">
           <span className="dot dot--bad" />
-          No scores are shown when the evaluation request fails. A failed read is
-          not an empty evaluation and never becomes a zero score.
+          <span>
+            No scores are shown when the evaluation request fails. A failed read is
+            not an empty evaluation and never becomes a zero score.
+          </span>
         </p>
       </>
     );
@@ -199,110 +292,152 @@ export function EvaluationPage() {
   } else if (state === "ready" && metrics && matrix) {
     evaluationBody = (
       <div className="stack gap-14">
-        <div className="metric-grid">
+        <ReadinessHero
+          tone="ok"
+          title="Evaluation ready"
+          detail={`Scores are computed by the API from ${formatNumber(
+            data?.predicted_positive,
+          )} positive predictions matched to persisted labels.`}
+          matched={data?.labeled_observations}
+          total={data?.total_observations}
+          coverage={data?.coverage}
+        />
+
+        <SectionHeader
+          title="Agreement metrics"
+          meta={`${formatNumber(metrics.n_labeled)} labels matched`}
+        />
+        <MetricGrid columns={5} label="Agreement metrics">
           {rateCards.map((card) => (
-            <div className="metric-cell" key={card.label}>
-              <span className="metric-cell__label mono">{card.label}</span>
-              <span className="metric-cell__value">{formatRate(card.value)}</span>
-              <span
-                className="metric-cell__bar"
-                aria-hidden="true"
-                style={{ width: `${Math.min(100, Math.max(0, card.value * 100))}%` }}
-              />
-            </div>
+            <MetricCard
+              key={card.label}
+              label={card.label}
+              value={formatRate(card.value)}
+              meter={Number.isFinite(card.value) ? card.value : null}
+              tone={card.tone}
+              hint={card.hint}
+            />
           ))}
-          {auc !== null && (
-            <div className="metric-cell">
-              <span className="metric-cell__label mono">ROC-AUC</span>
-              <span className="metric-cell__value">{formatMetric(auc)}</span>
-              <span
-                className="metric-cell__bar"
-                aria-hidden="true"
-                style={{ width: `${Math.min(100, Math.max(0, auc * 100))}%` }}
-              />
-            </div>
-          )}
-        </div>
+        </MetricGrid>
 
-        <div className="eval-divider">
-          <span className="mono">Confusion matrix</span>
-          <span className="mono">{formatNumber(matrix.total)} matched labels</span>
-        </div>
-        <table className="confusion" aria-label="Confusion matrix">
-          <caption className="sr-only">
-            Predicted anomaly versus normal, by ground-truth label
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">
-                <span className="confusion__axis">Ground truth</span>
-              </th>
-              <th scope="col">
-                <span className="confusion__axis">Predicted anomaly</span>
-                <span className="confusion__sub">positive</span>
-              </th>
-              <th scope="col">
-                <span className="confusion__axis">Predicted normal</span>
-                <span className="confusion__sub">negative</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">
-                <span className="confusion__axis">Anomaly label</span>
-              </th>
-              <td className="confusion__cell confusion__cell--tp">
-                <span className="confusion__value">{formatNumber(matrix.tp)}</span>
-                <span className="confusion__code mono">TP</span>
-              </td>
-              <td className="confusion__cell confusion__cell--fn">
-                <span className="confusion__value">{formatNumber(matrix.fn)}</span>
-                <span className="confusion__code mono">FN</span>
-              </td>
-            </tr>
-            <tr>
-              <th scope="row">
-                <span className="confusion__axis">Normal label</span>
-              </th>
-              <td className="confusion__cell confusion__cell--fp">
-                <span className="confusion__value">{formatNumber(matrix.fp)}</span>
-                <span className="confusion__code mono">FP</span>
-              </td>
-              <td className="confusion__cell confusion__cell--tn">
-                <span className="confusion__value">{formatNumber(matrix.tn)}</span>
-                <span className="confusion__code mono">TN</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p className="note-line note-line--wrap">
-          <span className="dot dot--live" />
-          {data?.positive_rule}
-          <span className="dim">
-            {" "}
-            · {formatNumber(metrics.n_labeled)} labels matched to observations
-          </span>
-        </p>
-
-        {auc === null && (
-          <div className="eval-unavailable" role="status">
-            <AlertIcon width={15} height={15} />
-            <div>
-              <p className="eval-unavailable__title">ROC-AUC not available</p>
-              <p className="eval-unavailable__body">
-                The evaluation API returns threshold metrics only. It does not
-                expose ranked probabilities, so an ROC-AUC cannot be computed
-                here — it is not reported as zero or guessed.
-              </p>
-            </div>
+        <div className="eval-matrix">
+          <div className="eval-matrix__main">
+            <SectionHeader
+              title="Confusion matrix"
+              meta={`${formatNumber(matrix.total)} matched labels`}
+            />
+            <table className="confusion" aria-label="Confusion matrix">
+              <caption className="sr-only">
+                Predicted anomaly versus normal, by ground-truth label
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">
+                    <span className="confusion__axis">Ground truth</span>
+                  </th>
+                  <th scope="col">
+                    <span className="confusion__axis">Predicted anomaly</span>
+                    <span className="confusion__sub">positive</span>
+                  </th>
+                  <th scope="col">
+                    <span className="confusion__axis">Predicted normal</span>
+                    <span className="confusion__sub">negative</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    <span className="confusion__axis">Anomaly label</span>
+                  </th>
+                  <td className="confusion__cell confusion__cell--tp">
+                    <span className="confusion__value">{formatNumber(matrix.tp)}</span>
+                    <span className="confusion__code mono">TP</span>
+                    <span className="confusion__name">True positive</span>
+                  </td>
+                  <td className="confusion__cell confusion__cell--fn">
+                    <span className="confusion__value">{formatNumber(matrix.fn)}</span>
+                    <span className="confusion__code mono">FN</span>
+                    <span className="confusion__name">False negative</span>
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    <span className="confusion__axis">Normal label</span>
+                  </th>
+                  <td className="confusion__cell confusion__cell--fp">
+                    <span className="confusion__value">{formatNumber(matrix.fp)}</span>
+                    <span className="confusion__code mono">FP</span>
+                    <span className="confusion__name">False positive</span>
+                  </td>
+                  <td className="confusion__cell confusion__cell--tn">
+                    <span className="confusion__value">{formatNumber(matrix.tn)}</span>
+                    <span className="confusion__code mono">TN</span>
+                    <span className="confusion__name">True negative</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="note-line note-line--wrap">
+              <span className="dot dot--live" />
+              <span>
+                {data?.positive_rule}
+                <span className="dim">
+                  {" "}
+                  · {formatNumber(metrics.n_labeled)} labels matched to observations
+                </span>
+              </span>
+            </p>
           </div>
-        )}
+
+          <aside className="eval-matrix__side">
+            {auc !== null ? (
+              <MetricCard
+                label="ROC-AUC"
+                value={formatMetric(auc)}
+                meter={auc}
+                tone="accent"
+                hint="ranked separation returned by the API"
+              />
+            ) : (
+              <div className="eval-unavailable" role="status">
+                <AlertIcon width={15} height={15} />
+                <div>
+                  <p className="eval-unavailable__title">ROC-AUC not available</p>
+                  <p className="eval-unavailable__body">
+                    The evaluation API returns threshold metrics only. It does not
+                    expose ranked probabilities, so an ROC-AUC cannot be computed
+                    here — it is not reported as zero or guessed.
+                  </p>
+                </div>
+              </div>
+            )}
+            <ul className="eval-legend">
+              {MATRIX_LEGEND.map((entry) => (
+                <li className={`eval-legend__item eval-legend__item--${entry.tone}`} key={entry.code}>
+                  <span className="eval-legend__code mono">{entry.code}</span>
+                  <span className="eval-legend__body">
+                    <span className="eval-legend__name">{entry.name}</span>
+                    <span className="eval-legend__detail mono">{entry.detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </aside>
+        </div>
       </div>
     );
   } else if (state === "insufficient") {
     evaluationBody = (
       <div className="stack gap-14">
+        <ReadinessHero
+          tone="warn"
+          title="Insufficient label diversity"
+          detail="A single labelled class cannot support agreement scores, so this run is reported as uncomputable rather than scored."
+          matched={data?.labeled_observations}
+          total={data?.total_observations}
+          coverage={data?.coverage}
+        />
         <EmptyState
           compact
           title="Not enough label diversity"
@@ -312,17 +447,20 @@ export function EvaluationPage() {
           }
           glyph={<LayersIcon width={17} height={17} />}
         />
-        <div className="eval-facts">
-          <span>
-            Stored labels: {formatNumber(labelTotal(data))}
-            <span className="dim">
-              {" "}
-              ({formatNumber(data?.label_counts?.Normal ?? 0)} normal /{" "}
-              {formatNumber(data?.label_counts?.Anomaly ?? 0)} anomaly)
+        <div className="eval-panel">
+          <ClassBalance normal={data?.label_counts?.Normal} anomaly={data?.label_counts?.Anomaly} />
+          <div className="eval-facts">
+            <span>
+              Stored labels: {formatNumber(labelTotal(data))}
+              <span className="dim">
+                {" "}
+                ({formatNumber(data?.label_counts?.Normal ?? 0)} normal /{" "}
+                {formatNumber(data?.label_counts?.Anomaly ?? 0)} anomaly)
+              </span>
             </span>
-          </span>
-          <span>Matched: {formatNumber(data?.labeled_observations)}</span>
-          <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+            <span>Matched: {formatNumber(data?.labeled_observations)}</span>
+            <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+          </div>
         </div>
         <div className="eval-unavailable" role="status">
           <AlertIcon width={15} height={15} />
@@ -340,6 +478,14 @@ export function EvaluationPage() {
   } else if (state === "no_labels") {
     evaluationBody = (
       <div className="stack gap-14">
+        <ReadinessHero
+          tone="warn"
+          title="Labels required"
+          detail="Nothing on this ledger is scored until curated labels are matched to observations."
+          matched={data?.labeled_observations}
+          total={data?.total_observations}
+          coverage={data?.coverage}
+        />
         <EmptyState
           compact
           title="No ground-truth labels"
@@ -349,22 +495,35 @@ export function EvaluationPage() {
           }
           glyph={<EvaluationIcon width={17} height={17} />}
         />
-        <div className="eval-facts">
-          <span>Total observations: {formatNumber(data?.total_observations)}</span>
-          <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
-          <span>Labels stored: {formatNumber(labelTotal(data))}</span>
+        <div className="eval-panel">
+          <ClassBalance normal={data?.label_counts?.Normal} anomaly={data?.label_counts?.Anomaly} />
+          <div className="eval-facts">
+            <span>Total observations: {formatNumber(data?.total_observations)}</span>
+            <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+            <span>Labels stored: {formatNumber(labelTotal(data))}</span>
+          </div>
         </div>
         <p className="note-line note-line--wrap">
           <span className="dot dot--warn" />
-          Label curation is not wired into this console yet, so this surface is
-          read-only. An unlabeled session is reported as unlabeled — never as a
-          zero score.
+          <span>
+            Label curation is not wired into this console yet, so this surface is
+            read-only. An unlabeled session is reported as unlabeled — never as a
+            zero score.
+          </span>
         </p>
       </div>
     );
   } else {
     evaluationBody = (
       <div className="stack gap-14">
+        <ReadinessHero
+          tone="warn"
+          title="Metrics unavailable"
+          detail="The label ledger loaded, but no metric document came back with it."
+          matched={data?.labeled_observations}
+          total={data?.total_observations}
+          coverage={data?.coverage}
+        />
         <EmptyState
           compact
           title="Metrics unavailable"
@@ -376,8 +535,10 @@ export function EvaluationPage() {
         />
         <p className="note-line note-line--wrap">
           <span className="dot dot--warn" />
-          This is an unavailable metric response, not an API failure and not a
-          measured zero.
+          <span>
+            This is an unavailable metric response, not an API failure and not a
+            measured zero.
+          </span>
         </p>
       </div>
     );
@@ -414,15 +575,14 @@ export function EvaluationPage() {
                 )}
               </select>
             </label>
-            <span className={`pill ${pill.className}`}>
-              <EvaluationIcon width={11} height={11} />
+            <StatusPill tone={pill.tone} icon={<EvaluationIcon width={11} height={11} />}>
               {pill.label}
-            </span>
+            </StatusPill>
           </div>
         }
       />
 
-      <div className="layout-split">
+      <div className="layout-split eval-layout">
         <Panel
           title="Agreement ledger"
           sub={
@@ -440,14 +600,18 @@ export function EvaluationPage() {
         </Panel>
 
         <div className="stack gap-14">
-          <Panel title="Report exports" sub={selected ? selected.session : "per session"}>
+          <Panel
+            title="Report exports"
+            sub={selected ? selected.session : "per session"}
+            actions={<span className="tag mono">server-rendered</span>}
+          >
             {!selectedId ? (
               <p className="note-line">
                 <span className="dot dot--warn" />
                 Exports are served per session; select one to enable these downloads.
               </p>
             ) : (
-              <div className="stack gap-8">
+              <div className="eval-exports">
                 {(["events", "tracks", "report"] as const).map((kind) => {
                   const meta = DOWNLOAD_META[kind];
                   const feedback = downloads[kind];
@@ -490,6 +654,9 @@ export function EvaluationPage() {
                                 ? "retry"
                                 : "download"}
                         </span>
+                        <span className="export-row__arrow" aria-hidden="true">
+                          <ArrowRightIcon width={13} height={13} />
+                        </span>
                       </button>
                       {feedback.status === "error" && (
                         <p className="eval-download__error" role="alert">
@@ -502,8 +669,10 @@ export function EvaluationPage() {
                 {selected && selected.counts.observations === 0 && (
                   <p className="note-line note-line--wrap">
                     <span className="dot dot--warn" />
-                    This session has no observations. Its CSV exports will contain
-                    headers only, and the report will state that the run is empty.
+                    <span>
+                      This session has no observations. Its CSV exports will contain
+                      headers only, and the report will state that the run is empty.
+                    </span>
                   </p>
                 )}
               </div>
@@ -515,7 +684,15 @@ export function EvaluationPage() {
             </p>
           </Panel>
 
-          <Panel title="Ground truth" sub="Coverage of this run">
+          <Panel
+            title="Ground truth"
+            sub="Coverage of this run"
+            actions={
+              data ? (
+                <span className="tag mono">{formatNumber(data.labeled_observations)} matched</span>
+              ) : undefined
+            }
+          >
             {!selectedId ? (
               <p className="note-line">
                 <span className="dot" />
@@ -523,7 +700,7 @@ export function EvaluationPage() {
               </p>
             ) : data ? (
               <div className="stack gap-14">
-                <div>
+                <div className="eval-coverage">
                   <div className="coverage">
                     {data.coverage !== null && (
                       <span
@@ -541,6 +718,7 @@ export function EvaluationPage() {
                     </span>
                   </div>
                 </div>
+                <ClassBalance normal={data.label_counts?.Normal} anomaly={data.label_counts?.Anomaly} />
                 <div className="rows rows--tight">
                   <div className="row">
                     <span className="row__key">Stored labels</span>
@@ -573,9 +751,11 @@ export function EvaluationPage() {
                 </div>
                 <p className="note-line note-line--wrap">
                   <span className="dot dot--warn" />
-                  Labels are matched to observations by frame and track. Stored
-                  labels can include rows that match no observation, so coverage
-                  reflects matched labels only.
+                  <span>
+                    Labels are matched to observations by frame and track. Stored
+                    labels can include rows that match no observation, so coverage
+                    reflects matched labels only.
+                  </span>
                 </p>
               </div>
             ) : evaluation.status === "loading" ? (
@@ -597,9 +777,9 @@ export function EvaluationPage() {
                 Select a session to open its evidence.
               </p>
             ) : (
-              <div className="stack gap-8">
+              <div className="eval-links">
                 <Link
-                  className="export-row"
+                  className="export-row export-row--link"
                   to={`/anomalies?session=${encodeURIComponent(selected.session)}`}
                   aria-label={`Open Anomaly Center for ${selected.session}`}
                 >
@@ -615,7 +795,7 @@ export function EvaluationPage() {
                   </span>
                 </Link>
                 <Link
-                  className="export-row"
+                  className="export-row export-row--link"
                   to={`/tracks?session=${encodeURIComponent(selected.session)}`}
                   aria-label={`Open Track Explorer for ${selected.session}`}
                 >
@@ -632,8 +812,10 @@ export function EvaluationPage() {
                 </Link>
                 <p className="note-line note-line--wrap">
                   <span className="dot dot--live" />
-                  These links carry the session into the evidence surfaces; they
-                  do not invent event or track identifiers.
+                  <span>
+                    These links carry the session into the evidence surfaces; they
+                    do not invent event or track identifiers.
+                  </span>
                 </p>
               </div>
             )}

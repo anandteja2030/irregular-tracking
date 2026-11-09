@@ -7,6 +7,9 @@ import { LevelMeter } from "../components/SessionBits";
 import { NAV_ITEMS } from "../app/navigation";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
+import { SectionHeader } from "../components/SectionHeader";
+import { MetricCard, MetricGrid } from "../components/MetricCard";
+import { StatusPill, type StatusTone } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import {
   ArrowRightIcon,
@@ -30,25 +33,25 @@ import type { SessionItem } from "../lib/types";
 function surfaceState(
   id: string,
   session: SessionItem | null,
-): { label: string; tone: string } {
-  if (id === "overview") return { label: "Live", tone: "pill--ok" };
-  if (id === "settings") return { label: "Config live", tone: "pill--ok" };
-  if (id === "studio") return { label: "Sources linked", tone: "pill--accent" };
-  if (!session) return { label: "No session", tone: "pill--mono-dim" };
-  if (id === "tracks") return { label: `${session.counts.tracks} tracks`, tone: "pill--accent" };
+): { label: string; tone: StatusTone } {
+  if (id === "overview") return { label: "Live", tone: "ok" };
+  if (id === "settings") return { label: "Config live", tone: "ok" };
+  if (id === "studio") return { label: "Sources linked", tone: "accent" };
+  if (!session) return { label: "No session", tone: "muted" };
+  if (id === "tracks") return { label: `${session.counts.tracks} tracks`, tone: "accent" };
   if (id === "anomalies") {
     return {
       label: `${session.counts.anomalies} events`,
-      tone: session.counts.anomalies > 0 ? "pill--warn" : "pill--mono-dim",
+      tone: session.counts.anomalies > 0 ? "warn" : "muted",
     };
   }
-  if (id === "scene") return { label: "Baseline measured", tone: "pill--accent" };
+  if (id === "scene") return { label: "Baseline measured", tone: "accent" };
   if (id === "evaluation") {
     return session.counts.labels > 0
-      ? { label: `${session.counts.labels} labels`, tone: "pill--accent" }
-      : { label: "No ground truth", tone: "pill--mono-dim" };
+      ? { label: `${session.counts.labels} labels`, tone: "accent" }
+      : { label: "No ground truth", tone: "muted" };
   }
-  return { label: "Ready", tone: "pill--mono-dim" };
+  return { label: "Ready", tone: "muted" };
 }
 
 export function OverviewPage() {
@@ -58,6 +61,7 @@ export function OverviewPage() {
   const sessionState = useSession();
   const { sessions, total: sessionTotal, status: sessionStatus, selected: session } = sessionState;
   const phase = apiPhase(health);
+  const online = phase === "online";
 
   const refreshAll = () => {
     health.reload();
@@ -90,6 +94,11 @@ export function OverviewPage() {
       ? "The console could not reach the analysis service on this origin. Runtime readings stay empty until the link recovers — nothing below is estimated."
       : "Runtime facts on this surface are measured live from the Python host: version, uptime, dependency inventory and the storage envelope behind the engine.";
 
+  const systemLoading = system.status === "loading" && !system.data;
+  const systemError = system.status === "error" ? "runtime API unreachable" : null;
+  const sourcesLoading = sources.status === "loading" && !sources.data;
+  const sourcesError = sources.status === "error" ? "source scan unavailable" : null;
+
   return (
     <>
       <PageHeader
@@ -98,10 +107,11 @@ export function OverviewPage() {
         lede="A single operational view of the analysis engine, its storage envelope and the surfaces that will carry session intelligence."
         aside={
           <>
-            <span className="pill pill--mono-dim">
-              <ClockIcon width={11} height={11} />
-              {lastSync ? `Synced ${new Date(lastSync).toLocaleTimeString("en-GB")}` : "Awaiting link"}
-            </span>
+            <StatusPill tone="muted" size="sm" icon={<ClockIcon width={11} height={11} />}>
+              {lastSync
+                ? `Synced ${new Date(lastSync).toLocaleTimeString("en-GB")}`
+                : "Awaiting link"}
+            </StatusPill>
             <button
               type="button"
               className={`btn ${system.refreshing || sources.refreshing ? "is-spinning" : ""}`}
@@ -116,26 +126,35 @@ export function OverviewPage() {
         }
       />
 
-      <section className={`hero ${phase !== "online" ? "hero--idle" : ""}`.trim()}>
+      <section
+        className={`hero deck ${phase !== "online" ? "hero--idle" : ""} deck--${phase}`.trim()}
+        aria-labelledby="overview-state"
+      >
         <div className="hero__grid">
           <div className="hero__copy">
             <span className="eyebrow">Runtime envelope</span>
-            <h2 className="hero__title">{heroTitle}</h2>
+            <h2 className="hero__title" id="overview-state">
+              {heroTitle}
+            </h2>
             <p className="hero__lede">{heroLede}</p>
             <div className="hero__meta">
-              <span className="pill pill--accent">NEURAL COMMAND API</span>
-              <span className="pill">v{health.data?.version ?? system.data?.version ?? "—"}</span>
-              <span className="pill">
-                <span
-                  className={`dot ${
-                    phase === "online" ? "dot--live" : phase === "offline" ? "dot--down" : ""
-                  }`}
-                />
-                {phase === "online" ? "Operational" : phase === "offline" ? "Offline" : "Linking"}
-              </span>
+              <StatusPill tone="accent" size="sm">
+                NEURAL COMMAND API
+              </StatusPill>
+              <StatusPill tone="neutral" size="sm">
+                v{health.data?.version ?? system.data?.version ?? "—"}
+              </StatusPill>
+              <StatusPill
+                tone={online ? "ok" : phase === "offline" ? "bad" : "muted"}
+                size="sm"
+                dot
+                live
+              >
+                {online ? "Operational" : phase === "offline" ? "Offline" : "Linking"}
+              </StatusPill>
             </div>
             <div className="hero__foot">
-              <Link className="btn" to="/video-studio">
+              <Link className="btn btn--primary" to="/video-studio">
                 Open source inventory
                 <span className="btn__icon">
                   <ArrowRightIcon width={13} height={13} />
@@ -172,54 +191,75 @@ export function OverviewPage() {
             </div>
           </div>
         </div>
-
-        <div className="readings hero__readings">
-          <div className="reading">
-            <span className="reading__label">Uptime</span>
-            <span className="reading__value">
-              {phase === "online" ? formatUptime(health.data?.uptime_s) : "—"}
-            </span>
-            <span className="reading__hint">current process</span>
-          </div>
-          <div className="reading">
-            <span className="reading__label">Python</span>
-            <span className="reading__value">
-              {system.data ? system.data.python : system.status === "error" ? "—" : "…"}
-            </span>
-            <span className="reading__hint">{system.data?.python_implementation ?? "runtime"}</span>
-          </div>
-          <div className="reading">
-            <span className="reading__label">Session store</span>
-            <span className="reading__value">
-              {system.data ? formatBytes(system.data.storage.db.bytes) : system.status === "error" ? "—" : "…"}
-            </span>
-            <span className="reading__hint">
-              {system.data?.storage.db.exists ? "SQLite present" : "not created yet"}
-            </span>
-          </div>
-          <div className="reading">
-            <span className="reading__label">Sample sources</span>
-            <span className="reading__value">
-              {sources.data ? sources.data.valid : sources.status === "error" ? "—" : "…"}
-              {sources.data && <span className="reading__unit">of {sources.data.count}</span>}
-            </span>
-            <span className="reading__hint">decodable clips</span>
-          </div>
-          <div className="reading">
-            <span className="reading__label">Sessions</span>
-            <span className="reading__value">
-              {sessionStatus === "error" ? "—" : sessionStatus === "loading" && sessionTotal === 0 ? "…" : sessionTotal}
-            </span>
-            <span className="reading__hint">persisted runs</span>
-          </div>
-        </div>
       </section>
 
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Operational surface</span>
-          <span className="section__meta">Seven workspaces</span>
-        </div>
+      <section className="section" aria-labelledby="overview-vitals">
+        <SectionHeader
+          title="System vitals"
+          id="overview-vitals"
+          meta="Measured host facts · live"
+          level={3}
+        />
+
+        <MetricGrid columns={5} label="System vitals" className="vitals-grid">
+          <MetricCard
+            label="Uptime"
+            value={online ? formatUptime(health.data?.uptime_s) : undefined}
+            hint="current process"
+            tone={online ? "ok" : "neutral"}
+            loading={phase === "linking"}
+          />
+          <MetricCard
+            label="Python"
+            value={system.data?.python}
+            hint={system.data?.python_implementation ?? "runtime"}
+            loading={systemLoading}
+            error={systemError}
+          />
+          <MetricCard
+            label="Session store"
+            value={system.data ? formatBytes(system.data.storage.db.bytes) : undefined}
+            hint={system.data?.storage.db.exists ? "SQLite present" : "not created yet"}
+            loading={systemLoading}
+            error={systemError}
+          />
+          <MetricCard
+            label="Sample sources"
+            value={sources.data?.valid}
+            unit={sources.data ? `of ${sources.data.count}` : undefined}
+            hint="decodable clips"
+            loading={sourcesLoading}
+            error={sourcesError}
+          />
+          <MetricCard
+            label="Sessions"
+            value={
+              sessionStatus === "error" || (sessionStatus === "loading" && sessionTotal === 0)
+                ? undefined
+                : sessionTotal
+            }
+            hint="persisted runs"
+            tone={sessionTotal > 0 ? "accent-2" : "neutral"}
+            loading={sessionStatus === "loading" && sessionTotal === 0}
+            error={sessionStatus === "error" ? sessionState.error ? describeError(sessionState.error) : "unavailable" : null}
+          />
+        </MetricGrid>
+
+        {phase === "offline" && health.error ? (
+          <p className="note-line note-line--danger deck-note">
+            <span className="dot dot--down" />
+            {describeError(health.error)}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="section" aria-labelledby="overview-surface">
+        <SectionHeader
+          title="Operational surface"
+          id="overview-surface"
+          meta="Seven workspaces"
+          level={3}
+        />
 
         <div className="layout-wide-left">
           <Panel
@@ -237,7 +277,9 @@ export function OverviewPage() {
                       <span className="surface-title">{item.label}</span>
                       <span className="surface-blurb">{item.blurb}</span>
                     </span>
-                    <span className={`pill ${state.tone}`}>{state.label}</span>
+                    <StatusPill tone={state.tone} size="sm" className="row--link__state">
+                      {state.label}
+                    </StatusPill>
                     <span className="row-arrow">
                       <ArrowRightIcon width={13} height={13} />
                     </span>
@@ -256,7 +298,7 @@ export function OverviewPage() {
           >
             {system.status === "error" ? (
               <ErrorState error={system.error} onRetry={system.reload} compact />
-            ) : system.status === "loading" && !system.data ? (
+            ) : systemLoading ? (
               <LoadingRows rows={5} label="Loading runtime" />
             ) : system.data ? (
               <div className="stack gap-14">
@@ -296,11 +338,13 @@ export function OverviewPage() {
         </div>
       </section>
 
-      <section className="section">
-        <div className="section__head">
-          <span className="section__title">Signals</span>
-          <span className="section__meta">Live sources · session ledger</span>
-        </div>
+      <section className="section" aria-labelledby="overview-signals">
+        <SectionHeader
+          title="Signals"
+          id="overview-signals"
+          meta="Live sources · session ledger"
+          level={3}
+        />
 
         <div className="grid-2">
           <Panel
@@ -314,7 +358,7 @@ export function OverviewPage() {
           >
             {sources.status === "error" ? (
               <ErrorState error={sources.error} onRetry={sources.reload} compact />
-            ) : sources.status === "loading" && !sources.data ? (
+            ) : sourcesLoading ? (
               <LoadingRows rows={3} label="Loading sources" />
             ) : sources.data && sources.data.sources.length > 0 ? (
               <div className="source-list source-list--compact">
@@ -414,13 +458,6 @@ export function OverviewPage() {
           </Panel>
         </div>
       </section>
-
-      {phase === "offline" && health.error ? (
-        <p className="note-line note-line--danger">
-          <span className="dot dot--down" />
-          {describeError(health.error)}
-        </p>
-      ) : null}
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { AppRoutes } from "../App";
 import { ApiHealthProvider } from "../app/ApiHealthProvider";
@@ -347,6 +347,66 @@ describe("anomaly intelligence center", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open investigation for event 23" }));
     await waitFor(() => expect(evidenceText()).toContain("no rule trigger was recorded"));
     expect(evidenceText()).toContain("No rule, ML note or scene note was recorded");
+  });
+
+  it("presents the summary as measured metric cards under named sections", async () => {
+    mockFetch();
+    renderCenter();
+
+    const group = await screen.findByRole("group", { name: "Intelligence metrics" });
+    expect(group.querySelectorAll(".metric-card")).toHaveLength(6);
+    expect(group.querySelectorAll('[data-state="ready"]')).toHaveLength(6);
+    const text = group.textContent ?? "";
+    for (const label of [
+      "Observations",
+      "Tracked objects",
+      "Elevated events",
+      "Distinct affected tracks",
+      "Mean fused score",
+      "Highest fused score",
+    ]) {
+      expect(text).toContain(label);
+    }
+    expect(text).toContain("0.62");
+    expect(text).toContain("0.98");
+    expect(within(group).getByText("25")).toBeTruthy();
+    expect(within(group).getByText("2")).toBeTruthy();
+
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Intelligence summary" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "Event workbench" })).toBeTruthy();
+  });
+
+  it("marks each ledger row with its persisted severity and the selected row", async () => {
+    mockFetch();
+    renderCenter();
+
+    await pagerText("1–20 / 25 events");
+    const rows = document.querySelectorAll(".table--anomaly-ledger tbody tr");
+    expect(rows).toHaveLength(20);
+    expect(document.querySelectorAll("tr.level-row--irregular").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("tr.level-row--suspicious").length).toBeGreaterThan(0);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open investigation for event 25" }),
+    );
+    await waitFor(() => {
+      const active = document.querySelector(".table--anomaly-ledger tr.is-active");
+      expect(active?.className).toContain("level-row--suspicious");
+    });
+  });
+
+  it("stages the retained frame evidence inside the cinematic viewport", async () => {
+    mockFetch();
+    renderCenter();
+
+    await pagerText("1–20 / 25 events");
+    const cinema = document.querySelector("#anomaly-frame-evidence .cinema");
+    expect(cinema).toBeTruthy();
+    expect(cinema?.querySelector(".investigator")).toBeTruthy();
+    expect(cinema?.querySelector(".frame img")).toBeTruthy();
+    expect(cinema?.textContent).toContain("Events on this frame");
   });
 
   it("opens the event addressed by a scene deep link", async () => {
