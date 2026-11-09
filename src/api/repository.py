@@ -17,6 +17,7 @@ Efficiency notes
 """
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from contextlib import contextmanager
@@ -665,6 +666,64 @@ def direction_profile(angles: list[float]) -> dict:
         if total else {}
     return {"samples": total, "counts": counts, "histogram": histogram,
             "dominant": _dominant(counts)}
+
+
+# --------------------------------------------------------------- trajectories
+def session_point_count(session: str) -> int:
+    """Number of persisted centroids for a session (0 for legacy runs)."""
+    with connect() as conn:
+        if conn is None or not _has_table(conn, "track_points"):
+            return 0
+        row = conn.execute(
+            "SELECT COUNT(*) FROM track_points WHERE session = ?",
+            (session,)).fetchone()
+    return int(row[0] or 0)
+
+
+def trajectory_points(session: str,
+                      track_id: int | None = None) -> list[dict]:
+    """Stored centroid points, ordered by frame; no interpolation."""
+    sql = ("SELECT frame_idx, x, y, level, speed_px_s, direction_deg"
+           " FROM track_points WHERE session = ?")
+    params: list = [session]
+    if track_id is not None:
+        sql += " AND track_id = ?"
+        params.append(track_id)
+    sql += " ORDER BY frame_idx"
+    with connect() as conn:
+        if conn is None or not _has_table(conn, "track_points"):
+            return []
+        rows = conn.execute(sql, params).fetchall()
+    return [{"frame": int(row["frame_idx"]),
+             "x": _finite(row["x"]), "y": _finite(row["y"]),
+             "level": row["level"],
+             "speed_px_s": _round(row["speed_px_s"], 1),
+             "direction_deg": _round(row["direction_deg"], 1)}
+            for row in rows]
+
+
+def calibration_snapshot(session: str) -> dict | None:
+    """Persisted versioned calibration document, or None when unreadable."""
+    with connect() as conn:
+        if conn is None or not _has_table(conn, "calibration_snapshots"):
+            return None
+        row = conn.execute(
+            "SELECT schema_version, captured_ts, payload"
+            " FROM calibration_snapshots WHERE session = ?",
+            (session,)).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("calibration"), dict):
+        return None
+    return {"schema_version": int(row["schema_version"]),
+            "captured_ts": row["captured_ts"],
+            "calibration": payload["calibration"],
+            "parameters": payload.get("parameters") or {}}
 
 
 # ---------------------------------------------------------------- evaluation

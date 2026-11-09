@@ -19,7 +19,9 @@ compatibility.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -41,6 +43,11 @@ PREVIEW_MAX_W = 640
 PREVIEW_STRIDE = 6
 MAX_PREVIEW_FRAMES = 240
 UPLOAD_MAX_AGE_S = 24 * 3600
+
+# Version of the persisted calibration document. Bumped only when the stored
+# JSON shape changes; readers treat an unknown version as unreadable rather
+# than guessing at its fields.
+CALIBRATION_SNAPSHOT_VERSION = 1
 
 # Flat per-observation schema shared by tables, CSV export and the DB row
 # mapper. `rules_json` holds the structured rule evidence for one row.
@@ -321,13 +328,95 @@ def _track_tables(obs: pd.DataFrame, summaries: list, fps: float
 
 
 # ------------------------------------------------------------------ database
+def _finite(value: float | None) -> float | None:
+    """A real finite float, or None (never NaN/Infinity in SQLite or JSON)."""
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _clean_json(value):
+    """Recursively replace non-finite numbers with None for a valid JSON doc."""
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _clean_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean_json(v) for v in value]
+    try:
+        return _clean_json(float(value))       # numpy scalar
+    except (TypeError, ValueError):
+        return None
+
+
+def trajectory_points(result: SessionResult) -> list[dict]:
+    """Every real observation centroid, in frame order - nothing interpolated."""
+    if result.obs is None or result.obs.empty:
+        return []
+    points: list[dict] = []
+    for rec in result.obs.to_dict("records"):
+        x, y = _finite(rec.get("cx")), _finite(rec.get("cy"))
+        if x is None or y is None:
+            continue
+        points.append({
+            "track_id": int(rec["track_id"]),
+            "frame": int(rec["frame"]),
+            "ts_s": float(rec.get("ts_s") or 0.0),
+            "x": x, "y": y,
+            "level": rec.get("level"),
+            "speed_px_s": _finite(rec.get("speed_px_s")),
+            "direction_deg": _finite(rec.get("direction_deg")),
+        })
+    return points
+
+
+def calibration_snapshot(scene, captured_ts: str | None) -> dict | None:
+    """Versioned, JSON-safe snapshot of the run's real calibration state."""
+    if scene is None:
+        return None
+    if dataclasses.is_dataclass(scene):
+        data = dataclasses.asdict(scene)
+    else:
+        data = dict(vars(scene))
+    cfg = load_config().calibration
+    parameters = {
+        "warmup_tracks": cfg.warmup_tracks,
+        "tracks_seconds": cfg.tracks_seconds,
+        "min_samples": cfg.min_samples,
+        "direction_bin_deg": cfg.direction_bin_deg,
+    }
+    return {
+        "schema_version": CALIBRATION_SNAPSHOT_VERSION,
+        "captured_ts": (captured_ts
+                        or datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        "calibration": _clean_json(data),
+        "parameters": _clean_json(parameters),
+    }
+
+
 def save_session_to_db(result: SessionResult) -> dict:
-    """Persist a run under its own session id (replaces that session only)."""
+    """Persist a run under its own session id (replaces that session only).
+
+    Rows are written in dependency order: observations and summaries, then the
+    `run_stats` parent row, then the batch of trajectory points and the
+    calibration snapshot that reference it. Re-saving the same session
+    replaces its rows instead of duplicating them.
+    """
     cfg = load_config()
     log = ResultLogger(cfg.paths.db, session=result.session)
     try:
         log.clear_session_events(result.session)
         log.clear_session_summaries(result.session)
+        log.clear_session_points(result.session)
+        log.clear_session_calibration(result.session)
         for rec in result.obs.to_dict("records"):
             log.log_event(int(rec["frame"]), _db_event_row(rec))
         for s in result.summaries:
@@ -341,7 +430,12 @@ def save_session_to_db(result: SessionResult) -> dict:
             "wall_s": result.wall_s, "max_frames": result.max_frames,
             "started_ts": result.started_ts, "ended_ts": result.ended_ts,
         })
-        return {"events": len(result.obs), "summaries": len(result.summaries)}
+        points = log.log_track_points(result.session, trajectory_points(result))
+        snapshot = calibration_snapshot(result.scene, result.ended_ts)
+        if snapshot is not None:
+            log.log_calibration(result.session, snapshot)
+        return {"events": len(result.obs), "summaries": len(result.summaries),
+                "points": points, "calibration": snapshot is not None}
     finally:
         log.close()
 

@@ -40,7 +40,7 @@ interface SceneSpatialProps {
 function trajectoryReason(session: SessionDetail): string {
   return (
     session.limitations.find((line) => /centroid|trajector/i.test(line)) ??
-    "Coordinates are only retained for sessions analysed by the current API process."
+    "No centroid coordinates are stored for this session, and none are reconstructed."
   );
 }
 
@@ -341,8 +341,8 @@ export function SceneSpatial({
     mapBody = (
       <EmptyState
         compact
-        title="Trajectory coordinates not persisted"
-        body={session.data ? trajectoryReason(session.data) : "No retained coordinates are available for this session."}
+        title="No stored trajectory coordinates"
+        body={session.data ? trajectoryReason(session.data) : "No stored coordinates are available for this session."}
         glyph={<ImageIcon width={17} height={17} />}
       />
     );

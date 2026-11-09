@@ -232,6 +232,24 @@ def test_upload_rejects_extension_container_mismatch(client: TestClient):
     assert response.json()["error"]["code"] == "extension_mismatch"
 
 
+def test_upload_sweeps_expired_abandoned_files(client: TestClient,
+                                               monkeypatch):
+    """The advertised upload TTL is enforced while the process runs too."""
+    from os import utime
+
+    monkeypatch.setattr(api_settings.settings, "upload_ttl_s", 3600)
+    abandoned = api_settings.upload_dir() / ("a" * 24 + ".mp4")
+    abandoned.write_bytes(b"abandoned upload")
+    stale = time.time() - 7200
+    utime(abandoned, (stale, stale))
+
+    response = _upload(client)
+    assert response.status_code == 201, response.text
+    assert not abandoned.exists()
+    # Only the fresh upload remains.
+    assert len(list(api_settings.upload_dir().iterdir())) == 1
+
+
 # ---------------------------------------------------------------- job basics
 def test_job_rejects_unknown_sample(client: TestClient):
     response = _create_job(client, "sample", "no_such_clip.mp4", 5)

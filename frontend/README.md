@@ -70,4 +70,5 @@ back/forward and reloads all preserve it.
 No endpoint was added or changed, and nothing in the console mutates engine
 state, the database or ground truth. Trajectories and learned calibration are
 reported as unavailable for historical sessions because the API states they
-are not persisted; the UI shows that reason instead of drawing placeholders.
+are persisted in SQLite with each completed session; legacy sessions without
+stored points show the API's reason instead of placeholder paths.

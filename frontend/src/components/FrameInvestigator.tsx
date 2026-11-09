@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ResourceState } from "../hooks/useResource";
 import type { AnomalyItem, MediaResponse } from "../lib/types";
+import { mediaUrl } from "../lib/api";
 import { stepPreviewFrame } from "../lib/studio";
 import { nearestFrame } from "../lib/tracks";
 import { formatClock, formatNumber } from "../lib/format";
@@ -42,7 +43,9 @@ export function FrameInvestigator({
 
   const frames = media.data?.frames ?? [];
   const frame = frames[Math.min(index, Math.max(0, frames.length - 1))] ?? null;
-  const src = frame ? (kind === "annotated" ? frame.annotated_url : frame.original_url) : null;
+  const src = frame
+    ? mediaUrl(kind === "annotated" ? frame.annotated_url : frame.original_url)
+    : null;
 
   useEffect(() => {
     setIndex(0);

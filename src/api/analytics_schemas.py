@@ -309,6 +309,8 @@ class TrajectoryResponse(BaseModel):
     available: bool
     points: list[TrajectoryPoint]
     reason: str | None
+    # "persisted" (SQLite), "in_process" (legacy artifact), or None.
+    source: str | None = None
 
 
 class ScoreSet(BaseModel):
@@ -487,6 +489,12 @@ class CalibrationInfo(BaseModel):
     tracks: int | None
     observed_seconds: float | None
     reason: str | None
+    # True when these values come from this session's stored snapshot rather
+    # than the live calibrator retained in memory.
+    persisted: bool = False
+    captured_ts: str | None = None
+    snapshot_version: int | None = None
+    parameters: dict | None = None
 
 
 class SpeedBaseline(BaseModel):

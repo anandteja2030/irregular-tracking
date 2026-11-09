@@ -484,6 +484,8 @@ def test_artifacts_enable_trajectory_evidence_and_frames(client, alpha_artifacts
     assert scene["calibration"] == {
         "available": True, "ready": True, "samples": 12, "tracks": 2,
         "observed_seconds": 0.6, "reason": None,
+        "persisted": False, "captured_ts": None,
+        "snapshot_version": None, "parameters": None,
     }
     assert scene["speed_baseline"]["p90"] == 180.0
     assert scene["directions"]["dominant"] == ["E"]
@@ -733,6 +735,9 @@ def test_real_job_results_are_served_and_match_database(client, _isolated_state)
     assert scene["source"] == "run_calibration"
     assert scene["calibration"]["available"] is True
     assert scene["calibration"]["samples"] >= 1
+    assert scene["calibration"]["persisted"] is True
+    assert scene["calibration"]["captured_ts"]
+    assert scene["calibration"]["snapshot_version"] == 1
 
     evaluation = client.get(f"/api/v1/sessions/{session}/evaluation").json()
     assert evaluation["available"] is False and evaluation["metrics"] is None

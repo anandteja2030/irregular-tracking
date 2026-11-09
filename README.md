@@ -18,6 +18,161 @@ logged to SQLite and exportable as CSV.
 Everything is parameterised from one file: `config/config.py` (HSV ranges,
 tracking gates, rules/ML weights, calibration warm-up).
 
+## NEURAL COMMAND API + React console
+
+The Streamlit dashboard below is still the reference desktop UI. This section
+documents the FastAPI service and the React console that wrap the same engine,
+and it is the authoritative setup guide for that stack.
+
+### Architecture
+
+```
+Browser — React 18 + TypeScript (Vite)
+        │  /api/v1  (Vite proxy in development; same origin or
+        │            VITE_API_BASE_URL in a deployment)
+FastAPI — src/api
+  ├─ routes/        system, config, sources, videos, jobs, sessions, tracks,
+  │                 anomalies, scene, evaluation, media
+  ├─ jobs.py        one-worker ThreadPoolExecutor, cooperative cancellation,
+  │                 progress WebSocket at /api/v1/jobs/{id}/ws
+  ├─ uploads.py     streaming upload validation (extension → MIME → magic
+  │                 bytes → container match → real OpenCV decode)
+  ├─ session_store.py  bounded in-process retention of preview JPEGs,
+  │                 trajectories, structured evidence and calibration
+  ├─ repository.py  read-only SQL aggregates over the existing schema
+  └─ analytics.py   payload builders shared by routes and reports.py
+
+Engine — unchanged: src/video → src/tracking → src/analysis → src/anomaly
+         → src/pipeline, writing data/app_data.db
+```
+
+One analysis job decodes frames, tracks them, scores every observation
+(calibrated rules + Isolation Forest + scene-relative), persists the rows under
+its own server-generated session id, and only then keeps the extra in-memory
+artifacts (preview frames, centroid trajectories, structured rule evidence).
+SQLite is always the source of truth; in-memory data is an enrichment layer
+that is reported as unavailable once it is gone.
+
+### Prerequisites
+
+- **Python 3.11+** (3.12 is what is tested) with a C toolchain for SciPy wheels.
+- **Node 20+** and npm for the console.
+- OpenCV can decode the video formats OpenCV normally supports; no browser
+  plugin, cloud service, paid API or API key is involved anywhere.
+
+### Python environment and dependencies
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt       # engine, Streamlit, pytest
+.venv/bin/pip install -r requirements-api.txt   # FastAPI, uvicorn, httpx
+.venv/bin/python scripts/generate_samples.py    # writes samples/*.mp4
+```
+
+### Database initialisation and schema
+
+`data/app_data.db` is created automatically the first time the engine or the
+logger writes. There is no migration command: `src/analysis/logger.py` creates
+its tables with `CREATE TABLE IF NOT EXISTS`, and `ground_truth.SCHEMA` creates
+the label table on first use.
+
+| Table | Contents |
+| --- | --- |
+| `run_stats` | one row per run: source, kind, synthetic flag, frames, resolution, fps, wall time |
+| `track_events` | one row per tracked observation: level, fused/rule/ML/scene scores, speed, heading, explanation |
+| `track_summaries` | one row per track: colour, shape, duration, mean/max speed, path length, straightness |
+| `ground_truth` | per-observation labels (`Normal`/`Anomaly`); empty until labels are written |
+
+To start from a clean store, stop the API and Streamlit, move
+`data/app_data.db` aside, and let the next run recreate it. Never edit rows by
+hand while a job is running.
+
+### Backend startup
+
+```bash
+.venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+- `GET /health` (cheap liveness), `GET /system` (measured runtime and storage
+  facts, enforced limits, report formats), `GET /docs` and `/openapi.json`.
+- The console uses the versioned mirror under `/api/v1`; the unversioned routes
+  are kept for existing clients.
+- Shutdown cancels active jobs and waits briefly for workers, so no thread is
+  killed mid-write.
+
+### Frontend startup
+
+```bash
+cd frontend
+npm ci
+npm run dev -- --host 0.0.0.0     # http://localhost:5173, proxies /api to :8000
+npm run typecheck
+npm test                          # vitest
+npm run build                     # static bundle in frontend/dist
+```
+
+In development Vite proxies `/api` (including the job WebSocket) to
+`http://127.0.0.1:8000`, so the browser stays same-origin. Set
+`NEURAL_API_URL` to proxy somewhere else, or `VITE_API_BASE_URL` to point a
+built console at an API on another origin (add that origin to
+`NEURAL_ALLOWED_ORIGINS`).
+
+### Environment configuration
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `NEURAL_UPLOAD_DIR` | `output/uploads` | where validated uploads are stored |
+| `NEURAL_MAX_UPLOAD_MB` | `256` | hard streaming size cap |
+| `NEURAL_UPLOAD_TTL_HOURS` | `24` | abandoned uploads are swept on start-up and on each new upload |
+| `NEURAL_JOB_WORKERS` | `1` | analysis workers (CPU-bound; more workers do not speed up one run) |
+| `NEURAL_MAX_FRAMES_CAP` | `5000` | largest accepted `max_frames` per job |
+| `NEURAL_ALLOWED_ORIGINS` | localhost:5173/3000 | CORS allowlist for a cross-origin console |
+| `NEURAL_API_URL` | `http://127.0.0.1:8000` | Vite dev proxy target |
+| `VITE_API_BASE_URL` | `/api/v1` | API base baked into a production console build |
+
+Engine tunables (HSV ranges, gates, rule/ML weights, zones) live in
+`config/config.py`. They can be read and deep-patched at runtime through
+`GET/PUT /api/v1/config` and `POST /api/v1/config/reset`; changes are
+process-local and reset on restart, which `/system` reports explicitly.
+
+### Video processing workflow
+
+1. `POST /api/v1/videos/upload` streams the file and validates extension, MIME,
+   container magic bytes and a real decode; it returns an `upload_id`.
+2. `POST /api/v1/jobs` starts a job for a bundled sample (`kind: "sample"`) or
+   an `upload_id` (`kind: "upload"`), with optional `max_frames`.
+3. `GET /api/v1/jobs/{id}` or the WebSocket `/api/v1/jobs/{id}/ws` reports real
+   progress (`percent` is `null` while the total is unknown).
+4. `POST /api/v1/jobs/{id}/cancel` requests cooperative cancellation.
+5. A completed job persists its session; explore it with
+   `/sessions/{id}`, `/summary`, `/tracks`, `/tracks/{id}/trajectory`,
+   `/observations`, `/anomalies`, `/anomalies/{event}`, `/scene`, `/media`,
+   `/frames/{n}`, `/evaluation`.
+6. Exports: `/sessions/{id}/export/csv?dataset=events|tracks` and
+   `/sessions/{id}/report` (markdown, `?download=true` for attachment).
+
+### Current API/console limitations
+
+- **Trajectories are persisted.** Every observation's real centroid is written
+  to the indexed `track_points` table when a session completes, so historical
+  sessions return the same paths after a restart. Sessions analysed before this
+  storage existed (or tracks with no observations) report an unavailable reason
+  instead of a reconstructed path.
+- **Calibration snapshots are persisted.** Completed sessions store a versioned
+  JSON snapshot of the calibration status, baseline statistics, direction
+  distribution and thresholds in `calibration_snapshots`. `/scene` prefers that
+  snapshot over the running process's live calibrator; legacy sessions fall
+  back to clearly-labelled observation-derived distributions.
+- **Ground-truth labels cannot be edited from the console.** The evaluation
+  surface is read-only: the API reports stored labels, but no write endpoint or
+  UI exists yet (the Streamlit Evaluation page can still write labels).
+- **No annotated video is produced or downloadable.** Only decimated preview
+  frames (JPEG, every 6th frame, max 240) are retained, for the most recent
+  four sessions in memory.
+- **Jobs and preview artifacts are lost on restart.** Persisted sessions, tracks,
+  events and exports remain readable; the API says why media is unavailable
+  instead of substituting other data.
+
 ## Quick start (local machine with a webcam)
 
 ```bash
@@ -69,7 +224,7 @@ docker run --rm -p 8501:8501 \
 # 3. verify health (endpoint verified on streamlit 1.66.x: 200 + body "ok")
 curl -f http://localhost:8501/_stcore/health && echo " healthy"
 
-# 4. run the 76-test suite inside the image
+# 4. run the test suite inside the image
 docker run --rm irregular-tracking:latest python -m pytest tests -q
 
 # 5. or bring the stack up with Compose (persistent volumes for SQLite logs
@@ -111,7 +266,7 @@ src/ui/report.py            markdown session report builder
 src/ui/theme.py             dark theme, layout + shared components
 scripts/generate_samples.py synthetic sample videos
 scripts/run_pipeline.py     CLI entry point
-tests/                      pytest suites per phase (96 tests)
+tests/                      pytest suites per phase (176 tests, incl. API)
 ```
 
 ## Dashboard tour (six pages)
@@ -160,7 +315,7 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 
 ## What is verified vs what is not
 
-**Verified by the test suite (96 tests, all passing):**
+**Verified by the test suite (176 tests, all passing):**
 - video-input contract, preprocessing purity/cleanup, HSV masks incl. red
   wrap-around, shape classification, area filters
 - Kalman constant-velocity convergence, noisy-measurement smoothing,
@@ -238,14 +393,28 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 | Suspicious rows on an otherwise normal video | The fusion is deliberately sensitive: Suspicious (≥0.35) is a soft flag; check the *Irregular* count and the per-row `why` text to judge. |
 | `ModuleNotFoundError: No module named 'config'` | Launching from an odd directory is handled by a path bootstrap — if you still see it, run from the project root or use `.venv/bin/python -m scripts.run_pipeline ...`. |
 | Slow long videos | Lower the frame-budget slider; processing is ~18 fps at 720p on a modest CPU. |
+| Console shows "service unreachable" | Start the API on `127.0.0.1:8000` (or set `NEURAL_API_URL` / `VITE_API_BASE_URL`); `GET /health` must answer before the console can load data. |
+| Console loads but previews are 404 | Preview frames are in-process only: restarting the API drops them for old sessions, and the response says so. Re-run the analysis to regenerate them. |
+| Job disappeared after a restart | The job registry is in memory. The persisted session is still listed and fully readable; start the analysis again if you need a live job. |
+| CORS errors from a deployed console | Add the console origin to `NEURAL_ALLOWED_ORIGINS` (comma-separated) and restart the API. |
 
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests -q         # full suite
+# backend: engine, dashboard, and the FastAPI integration suite
+.venv/bin/python -m pytest tests -q
+
+# frontend: types, unit tests, production build
+cd frontend && npm run typecheck && npm test && npm run build
+
 .venv/bin/python scripts/generate_samples.py
 .venv/bin/python -m scripts.run_pipeline samples/anomaly_clip.mp4
 ```
+
+The API tests (`tests/test_api_phase*.py`) run against a temporary database and
+temporary upload directory. They exercise upload rejection paths, job lifecycle
+(progress, duplicates, cooperative cancellation, crash handling), WebSocket
+streaming, every analytics endpoint, both CSV exports and the markdown report.
 
 Logs: `data/app_data.db` (tables `track_events`, `track_summaries`),
 `output/*.csv`.

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { api, ApiError, downloadSessionExport } from "./api";
+import { api, ApiError, downloadSessionExport, mediaUrl } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -19,6 +19,26 @@ describe("api.health", () => {
     expect(health).toEqual({ status: "ok", version: "1.0.0", uptime_s: 12.5 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/v1\/health$/);
+  });
+});
+
+describe("mediaUrl", () => {
+  it("keeps API asset paths same-origin by default", () => {
+    expect(mediaUrl("/api/v1/sessions/s1/frames/6", "/api/v1")).toBe(
+      "/api/v1/sessions/s1/frames/6",
+    );
+  });
+
+  it("resolves asset paths against a configured API origin", () => {
+    expect(
+      mediaUrl("/api/v1/sessions/s1/frames/6", "https://api.example.com/api/v1"),
+    ).toBe("https://api.example.com/api/v1/sessions/s1/frames/6");
+  });
+
+  it("leaves already-absolute asset URLs untouched", () => {
+    expect(mediaUrl("https://cdn.example.com/f.jpg", "https://api.example.com/api/v1")).toBe(
+      "https://cdn.example.com/f.jpg",
+    );
   });
 });
 

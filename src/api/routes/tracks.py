@@ -53,8 +53,10 @@ def track_detail(session_id: str, track_id: int) -> dict:
     analytics.overview_or_404(analytics.validate_session_id(session_id))
     detail = _require_track(session_id, track_id)
     angles = repo.track_angles(session_id, track_id)
+    persisted = repo.trajectory_points(session_id, track_id)
     art = analytics.artifacts(session_id)
-    points = (art.trajectories.get(track_id) if art else None) or []
+    memory = (art.trajectories.get(track_id) if art else None) or []
+    available = bool(persisted or memory)
     return {
         "session": session_id,
         **detail,
@@ -63,9 +65,10 @@ def track_detail(session_id: str, track_id: int) -> dict:
             "source": "derived_event_observations",
         },
         "trajectory": {
-            "available": bool(points),
-            "points": len(points),
-            "reason": None if points else analytics.TRAJECTORY_LIMITATION,
+            "available": available,
+            "points": len(persisted) if persisted else len(memory),
+            "reason": (None if available
+                       else analytics.trajectory_unavailable_reason(session_id)),
         },
     }
 
@@ -97,15 +100,20 @@ def track_observations(
 def track_trajectory(session_id: str, track_id: int) -> dict:
     analytics.overview_or_404(analytics.validate_session_id(session_id))
     _require_track(session_id, track_id)
+    points = repo.trajectory_points(session_id, track_id)
+    source = "persisted" if points else None
     art = analytics.artifacts(session_id)
-    points = (art.trajectories.get(track_id) if art else None) or []
+    if not points:
+        # Sessions analysed by an older build (or before this feature) may
+        # still have points only in this process's artifacts.
+        points = (art.trajectories.get(track_id) if art else None) or []
+        source = "in_process" if points else None
     reason = None
     if not points:
-        reason = (analytics.TRAJECTORY_LIMITATION if art is None else
-                  "This API process retains no centroid positions for this "
-                  "track (the session may have been analysed elsewhere).")
+        reason = analytics.trajectory_unavailable_reason(session_id)
     return {"session": session_id, "track_id": track_id,
-            "available": bool(points), "points": points, "reason": reason}
+            "available": bool(points), "points": points, "reason": reason,
+            "source": source}
 
 
 @router.get("/{session_id}/tracks/{track_id}/frames",

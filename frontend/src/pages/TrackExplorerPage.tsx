@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../app/SessionProvider";
-import { api } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import { useResource, type ResourceState } from "../hooks/useResource";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
@@ -222,10 +222,12 @@ export function TrackExplorerPage() {
           .map((frame) => ({
             frame: frame.frame,
             ts_s: previewTs.get(frame.frame) ?? (fps ? frame.frame / fps : 0),
-            annotated_url: frame.frame_url as string,
-            original_url: (frame.frame_url as string).replace(
-              "kind=annotated",
-              "kind=original",
+            annotated_url: mediaUrl(frame.frame_url as string),
+            original_url: mediaUrl(
+              (frame.frame_url as string).replace(
+                "kind=annotated",
+                "kind=original",
+              ),
             ),
           }))
       : null;
@@ -407,8 +409,12 @@ export function TrackExplorerPage() {
                     <>
                       <span className={`dot ${trajectory.data?.available ? "dot--live" : "dot--warn"}`} />
                       {trajectory.data?.available
-                        ? `${formatNumber(trajectory.data.points.length)} retained centroid points`
-                        : "trajectory not retained for this track"}
+                        ? `${formatNumber(trajectory.data.points.length)} ${
+                            trajectory.data.source === "persisted"
+                              ? "stored"
+                              : "retained"
+                          } centroid points`
+                        : "no stored trajectory for this track"}
                     </>
                   }
                 >
@@ -434,9 +440,9 @@ export function TrackExplorerPage() {
                     <div className="canvas-stub">
                       <div className="canvas-stub__grid" aria-hidden="true" />
                       <EmptyState
-                        title="Trajectory not retained"
+                        title="No stored trajectory"
                         body={`${trajectory.data?.reason ??
-                          "This session stores scores, speed and direction per observation, but not centroid coordinates."} In-process trajectories are kept only for the most recently analysed sessions and are lost when the API restarts; the observation-based movement panel below still reads persisted rows.`}
+                          "No centroid coordinates are stored for this track."} Movement, observations and events below still read persisted rows; missing coordinates are never reconstructed.`}
                         glyph={<TrackIcon width={17} height={17} />}
                       />
                     </div>

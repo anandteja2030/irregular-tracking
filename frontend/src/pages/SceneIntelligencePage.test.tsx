@@ -389,7 +389,7 @@ describe("scene intelligence page", () => {
           preview_frames: 0,
         },
         limitations: [
-          "Centroid positions are not persisted in SQLite. A full trajectory is only available for sessions analysed by this API process.",
+          "Trajectory points were not persisted in SQLite by older versions of the pipeline. This session has no stored points, and a path cannot be reconstructed without inventing data.",
         ],
       }),
       events: json(
@@ -405,9 +405,46 @@ describe("scene intelligence page", () => {
     expect(screen.getByText(/kept in memory/)).toBeTruthy();
     expect(screen.getAllByText(/not a failed calibration/).length).toBeGreaterThan(0);
     expect(screen.getByText("Movement intelligence")).toBeTruthy();
-    expect(await screen.findByText("Trajectory coordinates not persisted")).toBeTruthy();
+    expect(await screen.findByText("No stored trajectory coordinates")).toBeTruthy();
     expect(screen.getByText("Zone evidence not retained")).toBeTruthy();
     expect(screen.queryByRole("img", { name: /Retained centroid density/ })).toBeNull();
+  });
+
+  it("renders a persisted snapshot and historical trajectories after a restart", async () => {
+    const persistedScene = {
+      ...readyScene,
+      calibration: {
+        ...readyScene.calibration,
+        persisted: true,
+        captured_ts: "2026-11-09T00:00:04+00:00",
+        snapshot_version: 1,
+        parameters: {
+          warmup_tracks: 2,
+          tracks_seconds: 12,
+          min_samples: 30,
+          direction_bin_deg: 30,
+        },
+      },
+    };
+    mockFetch({
+      scene: json(persistedScene),
+      session: json({
+        ...sessionItem,
+        artifacts: {
+          ...sessionItem.artifacts,
+          retained: false,
+          preview_frames: 0,
+        },
+      }),
+    });
+    renderPage();
+
+    expect(await screen.findByText("persisted snapshot")).toBeTruthy();
+    expect(screen.getByText(/captured 2026-11-09T00:00:04/)).toBeTruthy();
+    expect(
+      await screen.findByRole("img", { name: /Retained centroid density/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText("live calibration")).toBeNull();
   });
 
   it("shows a full scene API error without fabricating a fallback baseline", async () => {

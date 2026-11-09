@@ -36,6 +36,23 @@ import type {
 const RAW_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 export const API_BASE = RAW_BASE.replace(/\/+$/, "");
 
+/** Absolute URL for an API-served asset such as a preview JPEG.
+ *
+ * Asset URLs arrive from the API as `/api/v1/...` paths. When the console is
+ * configured to talk to a different origin through `VITE_API_BASE_URL`, those
+ * paths have to resolve against the API origin too, or the browser would ask
+ * the console's own origin for an image it does not serve.
+ */
+export function mediaUrl(path: string, base: string = API_BASE): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!/^https?:\/\//i.test(base)) return path;
+  try {
+    return new URL(path, new URL(base).origin).toString();
+  } catch {
+    return path;
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 export class ApiError extends Error {

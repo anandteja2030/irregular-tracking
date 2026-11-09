@@ -325,6 +325,8 @@ export interface TrajectoryResponse {
   available: boolean;
   points: TrajectoryPoint[];
   reason: string | null;
+  /** "persisted" (SQLite) or "in_process" (legacy artifact). */
+  source?: "persisted" | "in_process" | null;
 }
 
 export interface TrackFrameItem {
@@ -441,6 +443,11 @@ export interface SceneResponse {
     tracks: number | null;
     observed_seconds: number | null;
     reason: string | null;
+    /** True when these values come from the session's stored snapshot. */
+    persisted?: boolean;
+    captured_ts?: string | null;
+    snapshot_version?: number | null;
+    parameters?: Record<string, number | string> | null;
     [key: string]: unknown;
   };
   speed_baseline: StatSummary | null;

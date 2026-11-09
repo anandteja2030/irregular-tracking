@@ -11,6 +11,7 @@ CSV export mirrors the event table for spreadsheets.
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 import time
 from contextlib import closing
@@ -70,7 +71,38 @@ CREATE TABLE IF NOT EXISTS ground_truth (
     label TEXT NOT NULL,
     PRIMARY KEY (session, frame_idx, track_id)
 );
+CREATE TABLE IF NOT EXISTS track_points (
+    session TEXT NOT NULL,
+    track_id INTEGER NOT NULL,
+    frame_idx INTEGER NOT NULL,
+    ts_s REAL,
+    x REAL,
+    y REAL,
+    level TEXT,
+    speed_px_s REAL,
+    direction_deg REAL,
+    PRIMARY KEY (session, track_id, frame_idx),
+    FOREIGN KEY (session) REFERENCES run_stats(session) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS calibration_snapshots (
+    session TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    captured_ts TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    FOREIGN KEY (session) REFERENCES run_stats(session) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_track_points_track
+    ON track_points(session, track_id, frame_idx);
+CREATE INDEX IF NOT EXISTS idx_track_points_frame
+    ON track_points(session, frame_idx);
+CREATE INDEX IF NOT EXISTS idx_calibration_captured
+    ON calibration_snapshots(captured_ts);
 """
+
+# Schema version for the persistence layer. Fresh databases are created at
+# this version; older databases are upgraded in place by the idempotent
+# `CREATE TABLE/INDEX IF NOT EXISTS` statements above plus `_migrate_schema`.
+SCHEMA_VERSION = 2
 
 # Older databases keyed track_summaries by track_id alone, so a second
 # session silently overwrote the first session's rows. This rebuild keeps
@@ -111,8 +143,12 @@ class ResultLogger:
         self.db_path = Path(db_path)
         self.session = session
         self._conn = sqlite3.connect(self.db_path)
+        # Referential integrity is enforced for the new point/snapshot tables.
+        # Events and summaries predate these foreign keys and stay untouched.
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(EVENT_SCHEMA)
         self._migrate_summaries_pk()
+        self._migrate_schema()
         self._conn.commit()
 
     def _migrate_summaries_pk(self) -> None:
@@ -122,6 +158,14 @@ class ResultLogger:
         if pk_cols == ["session", "track_id"]:
             return                      # fresh or already-migrated schema
         self._conn.executescript(_MIGRATE_SUMMARIES_PK)
+
+    def _migrate_schema(self) -> None:
+        """Record the persistence schema version (idempotent, data-preserving)."""
+        current = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if current < SCHEMA_VERSION:
+            # Tables and indexes are already created by EVENT_SCHEMA above;
+            # this marker lets future migrations tell old databases apart.
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
         if self._conn is not None:
@@ -172,10 +216,110 @@ class ResultLogger:
             ev = cur.rowcount
             cur.execute("DELETE FROM track_summaries WHERE session = ?", (session,))
             su = cur.rowcount
+            cur.execute("DELETE FROM track_points WHERE session = ?", (session,))
+            pts = cur.rowcount
+            cur.execute("DELETE FROM calibration_snapshots WHERE session = ?",
+                        (session,))
+            cal = cur.rowcount
             cur.execute("DELETE FROM run_stats WHERE session = ?", (session,))
             cur.execute("DELETE FROM ground_truth WHERE session = ?", (session,))
         self._conn.commit()
-        return {"events": ev, "summaries": su}
+        return {"events": ev, "summaries": su, "points": pts,
+                "calibrations": cal}
+
+    # ------------------------------------------------------- trajectories
+    def log_track_points(self, session: str, points: list[dict]) -> int:
+        """Batch-insert one session's trajectory points in one transaction.
+
+        The (session, track_id, frame_idx) primary key makes a retry
+        idempotent: re-inserting the same observation replaces it instead of
+        duplicating it. A failure anywhere in the batch rolls the whole batch
+        back, so a partial trajectory is never left behind.
+        """
+        if not points:
+            return 0
+        rows = [
+            (session, int(point["track_id"]), int(point["frame"]),
+             float(point["ts_s"]), float(point["x"]), float(point["y"]),
+             point.get("level"),
+             None if point.get("speed_px_s") is None
+             else float(point["speed_px_s"]),
+             None if point.get("direction_deg") is None
+             else float(point["direction_deg"]))
+            for point in points
+        ]
+        with self._conn:                        # commit, or full rollback
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO track_points"
+                " (session, track_id, frame_idx, ts_s, x, y, level,"
+                "  speed_px_s, direction_deg)"
+                " VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        return len(rows)
+
+    def clear_session_points(self, session: str) -> int:
+        with closing(self._conn.cursor()) as cur:
+            cur.execute("DELETE FROM track_points WHERE session = ?", (session,))
+            n = cur.rowcount
+        self._conn.commit()
+        return n
+
+    def session_points(self, session: str,
+                       track_id: int | None = None) -> list[dict]:
+        """Persisted centroid points, ordered by track then frame."""
+        sql = ("SELECT track_id, frame_idx, ts_s, x, y, level, speed_px_s,"
+               " direction_deg FROM track_points WHERE session = ?")
+        params: list = [session]
+        if track_id is not None:
+            sql += " AND track_id = ?"
+            params.append(track_id)
+        sql += " ORDER BY track_id, frame_idx"
+        with closing(self._conn.cursor()) as cur:
+            rows = cur.execute(sql, params).fetchall()
+        return [{"track_id": r[0], "frame": r[1], "ts_s": r[2], "x": r[3],
+                 "y": r[4], "level": r[5], "speed_px_s": r[6],
+                 "direction_deg": r[7]} for r in rows]
+
+    # -------------------------------------------------------- calibration
+    def log_calibration(self, session: str, snapshot: dict) -> None:
+        """Upsert the versioned calibration snapshot for one session."""
+        payload = json.dumps(
+            {"calibration": snapshot["calibration"],
+             "parameters": snapshot.get("parameters") or {}},
+            sort_keys=True, allow_nan=False)
+        with self._conn:                        # commit, or full rollback
+            self._conn.execute(
+                "INSERT OR REPLACE INTO calibration_snapshots"
+                " (session, schema_version, captured_ts, payload)"
+                " VALUES (?,?,?,?)",
+                (session, int(snapshot["schema_version"]),
+                 str(snapshot["captured_ts"]), payload))
+
+    def clear_session_calibration(self, session: str) -> int:
+        with closing(self._conn.cursor()) as cur:
+            cur.execute("DELETE FROM calibration_snapshots WHERE session = ?",
+                        (session,))
+            n = cur.rowcount
+        self._conn.commit()
+        return n
+
+    def get_calibration(self, session: str) -> dict | None:
+        """Stored snapshot, or None when absent/unreadable (never guessed)."""
+        with closing(self._conn.cursor()) as cur:
+            row = cur.execute(
+                "SELECT schema_version, captured_ts, payload"
+                " FROM calibration_snapshots WHERE session = ?",
+                (session,)).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row[2])
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict) or "calibration" not in payload:
+            return None
+        return {"schema_version": int(row[0]), "captured_ts": row[1],
+                "calibration": payload["calibration"],
+                "parameters": payload.get("parameters") or {}}
 
     # --------------------------------------------------------- run stats
     def log_run(self, info: dict) -> None:

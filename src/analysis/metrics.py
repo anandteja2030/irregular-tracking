@@ -99,9 +99,9 @@ def evaluate(obs_rows: list[dict], labels: list[dict]) -> EvaluationOutcome:
     """
     if not labels:
         return EvaluationOutcome(metrics=None,
-                                 reason="No ground-truth labels yet - "
-                                        "label tracks on this page to enable "
-                                        "evaluation.")
+                                 reason="No ground-truth labels yet - store "
+                                        "Normal and Anomaly labels for this "
+                                        "session to enable evaluation.")
     label_map = {(int(r["frame_idx"]), int(r["track_id"])): r["label"]
                  for r in labels}
     y_true: list[str] = []

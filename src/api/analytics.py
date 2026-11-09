@@ -31,21 +31,22 @@ MEDIA_LIMITATION = (
     "memory only for sessions analysed by this API process, so they disappear "
     "on restart and are not available for CLI/Streamlit historical sessions.")
 TRAJECTORY_LIMITATION = (
-    "Centroid positions are not persisted in SQLite (the schema stores one row "
-    "per observation with scores, speed and direction, plus per-track "
-    "aggregates). A full trajectory is therefore only available for sessions "
-    "analysed by this API process.")
+    "Trajectory points were not persisted in SQLite by older versions of the "
+    "pipeline. SQLite now stores every observed centroid in the indexed "
+    "track_points table; this session has no stored points (it predates that "
+    "table or recorded no coordinates), and a path cannot be reconstructed "
+    "without inventing data.")
 EVIDENCE_LIMITATION = (
     "Structured rule evidence (per-rule severity and description) is not "
     "persisted; the database keeps the fused/rule/ML/scene scores and the "
     "generated explanation. Rule-level evidence is available only for sessions "
     "analysed by this API process.")
 CALIBRATION_LIMITATION = (
-    "The learned calibration baseline (sample count, ready flag, speed "
-    "percentiles, dominant flow) is kept in memory during a run and is not "
-    "written to SQLite, so it is unavailable for historical sessions. "
-    "Observation-derived speed and direction distributions below are computed "
-    "from persisted rows and are labelled as such.")
+    "No calibration snapshot is stored for this session (snapshots are written "
+    "for sessions analysed since durable calibration storage was added, and "
+    "only when the run produced calibration state). Observation-derived speed "
+    "and direction distributions below are computed from persisted rows and "
+    "are labelled as such.")
 
 
 # --------------------------------------------------------------------- guards
@@ -137,20 +138,34 @@ def media_payload(session: str) -> dict:
 
 
 # ------------------------------------------------------------------- payloads
+def trajectory_unavailable_reason(session: str) -> str:
+    """Honest reason for a missing path, without implying reconstruction."""
+    if artifacts(session) is None:
+        return TRAJECTORY_LIMITATION
+    return ("No centroid points were stored for this track in SQLite or in "
+            "this process's artifacts.")
+
+
 def _limitations(session: str) -> list[str]:
     art = artifacts(session)
     notes: list[str] = []
+    stored_points = repo.session_point_count(session) > 0
+    stored_calibration = repo.calibration_snapshot(session) is not None
     if art is None:
         notes.append(EVIDENCE_LIMITATION)
-        notes.append(TRAJECTORY_LIMITATION)
+        if not stored_points:
+            notes.append(TRAJECTORY_LIMITATION)
         notes.append(MEDIA_LIMITATION.format(stride=6))
-        notes.append(CALIBRATION_LIMITATION)
+        if not stored_calibration:
+            notes.append(CALIBRATION_LIMITATION)
     else:
         notes.append(
-            "Structured evidence, trajectories and preview frames for this "
-            "session are retained in memory by this API process only and are "
-            "released on restart or after newer sessions replace them.")
-        if not art.scene:
+            "Structured rule evidence and preview frames for this session are "
+            "retained in memory by this API process only and are released on "
+            "restart or after newer sessions replace them; completed sessions "
+            "persist their trajectory points and calibration snapshot in "
+            "SQLite.")
+        if not stored_calibration:
             notes.append(CALIBRATION_LIMITATION)
     return notes
 
@@ -163,9 +178,11 @@ def detail_payload(session: str) -> dict:
         **overview,
         "artifacts": {
             "retained": art is not None,
-            "trajectories": bool(art and art.has_trajectories),
+            "trajectories": (bool(art and art.has_trajectories)
+                             or repo.session_point_count(session) > 0),
             "structured_evidence": bool(art and art.has_evidence),
-            "scene_calibration": bool(art and art.scene),
+            "scene_calibration": (bool(art and art.scene)
+                                  or repo.calibration_snapshot(session) is not None),
             "preview_frames": len(frames),
         },
         "media": {
@@ -261,12 +278,22 @@ def scene_payload(session: str) -> dict:
     art = artifacts(session)
     scene = repo.scene_observations(session)
     notes: list[str] = []
-    recorded = art.scene if art and art.scene else None
+    # A stored snapshot is this session's own calibration at completion time;
+    # it outranks the live calibrator still held in this process.
+    snapshot = repo.calibration_snapshot(session)
+    persisted = snapshot is not None
+    recorded = (snapshot["calibration"] if snapshot
+                else (art.scene if art and art.scene else None))
+    captured_ts = snapshot["captured_ts"] if snapshot else None
+    snapshot_version = snapshot["schema_version"] if snapshot else None
+    parameters = snapshot["parameters"] if snapshot else None
 
     if recorded is None:
         calibration = {
             "available": False, "ready": None, "samples": None, "tracks": None,
             "observed_seconds": None, "reason": CALIBRATION_LIMITATION,
+            "persisted": False, "captured_ts": None,
+            "snapshot_version": None, "parameters": None,
         }
         notes.append(
             "Speed distribution and directions below are derived from this "
@@ -293,6 +320,10 @@ def scene_payload(session: str) -> dict:
             "tracks": recorded.get("n_tracks"),
             "observed_seconds": recorded.get("observed_seconds"),
             "reason": None,
+            "persisted": persisted,
+            "captured_ts": captured_ts,
+            "snapshot_version": snapshot_version,
+            "parameters": parameters,
         }
         speeds = {
             "samples": int(recorded.get("n_samples") or 0),
@@ -317,10 +348,18 @@ def scene_payload(session: str) -> dict:
             "source": "run_calibration",
         }
         source = "run_calibration"
-        notes.append(
-            "Calibration values come from the calibrator at the end of the "
-            "run (in-process artifact); deviations are computed from the "
-            "persisted per-observation scene scores.")
+        if persisted:
+            notes.append(
+                f"Calibration is this session's persisted snapshot (schema "
+                f"v{snapshot_version}, captured {captured_ts}); it is "
+                "independent of the current live calibrator. Deviations are "
+                "computed from persisted per-observation scene scores.")
+        else:
+            notes.append(
+                "Calibration values come from the calibrator at the end of the "
+                "run (live in-process state, not a stored snapshot); "
+                "deviations are computed from persisted per-observation scene "
+                "scores.")
 
     return {
         "session": session,

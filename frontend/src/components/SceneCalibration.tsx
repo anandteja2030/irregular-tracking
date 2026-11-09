@@ -76,14 +76,22 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
                 {calibration.available
                   ? `${calibration.ready ? "Readiness gates met" : "Readiness gates not met"} · ${formatNumber(
                       calibration.samples ?? 0,
-                    )} samples`
+                    )} samples${
+                      calibration.persisted && calibration.captured_ts
+                        ? ` · captured ${calibration.captured_ts}`
+                        : ""
+                    }`
                   : isHistorical
-                    ? "The calibrator artifact was not persisted for this session."
+                    ? "No calibration snapshot was stored for this session."
                     : "The API returned no calibration artifact."}
               </span>
             </div>
             <span className="tag calibration-hero__artifact">
-              {calibration.available ? "in-process artifact" : "not retained"}
+              {calibration.available
+                ? calibration.persisted
+                  ? "persisted snapshot"
+                  : "live calibration"
+                : "not retained"}
             </span>
           </div>
 
@@ -207,6 +215,13 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
                 : "No observation-derived scene baseline is asserted when the API cannot support one."}
             </p>
           </div>
+        )}
+
+        {calibration.available && !calibration.persisted && (
+          <p className="hint hint--flush">
+            These values are the API process's live calibrator, not a stored
+            historical snapshot; they are not retained after a restart.
+          </p>
         )}
 
         <p className="hint hint--flush">

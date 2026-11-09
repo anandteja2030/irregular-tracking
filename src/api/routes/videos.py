@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from src.api.uploads import UploadError, store_upload
+from src.api.uploads import UploadError, cleanup_stale, store_upload
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -21,6 +21,15 @@ def upload_video(file: UploadFile = File(
     The response carries a server-generated `upload_id` and measured metadata;
     it never exposes filesystem paths.
     """
+    # The upload TTL is enforced at start-up; also sweep here so a long-lived
+    # process does not accumulate abandoned files until the next restart.
+    # Files still referenced by an active job are kept.
+    try:
+        from src.api.jobs import manager     # local import: jobs imports uploads
+        cleanup_stale(active_refs=manager.active_upload_refs())
+    except (OSError, RuntimeError):
+        pass
+
     try:
         record = store_upload(file.file, filename=file.filename or "",
                               content_type=file.content_type)

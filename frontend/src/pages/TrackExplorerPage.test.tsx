@@ -143,6 +143,7 @@ const TRAJECTORY = {
   track_id: 3,
   available: true,
   reason: null,
+  source: "persisted",
   points: Array.from({ length: 20 }, (_, frame) => ({
     frame,
     x: 600 - frame * 10,
@@ -421,6 +422,7 @@ describe("track explorer", () => {
     await screen.findByText("T03 · measured lifecycle and motion");
     await screen.findByRole("img", { name: /Persisted centroid path for track T03/ });
     await screen.findByRole("img", { name: /^Speed over/ });
+    expect(screen.getByText(/20 stored centroid points/)).toBeTruthy();
     const legend = document.querySelector(".trajectory__legend");
     expect(legend?.textContent).toContain("Normal");
     expect(legend?.textContent).toContain("Suspicious");
@@ -462,5 +464,26 @@ describe("track explorer", () => {
     expect(
       await screen.findByText(/not in this session's retained preview set/),
     ).toBeTruthy();
+  });
+
+  it("shows an honest no-stored-trajectory state for a legacy track", async () => {
+    mockFetch({
+      trajectory: json({
+        session: SESSION,
+        track_id: 0,
+        available: false,
+        points: [],
+        reason:
+          "Trajectory points were not persisted in SQLite by older versions of the pipeline.",
+        source: null,
+      }),
+    });
+    renderExplorer(`/tracks?session=${SESSION}&track=0`);
+
+    expect(await screen.findByText("No stored trajectory")).toBeTruthy();
+    expect(
+      screen.getByText(/were not persisted in SQLite by older versions/),
+    ).toBeTruthy();
+    expect(screen.getByText(/never reconstructed/)).toBeTruthy();
   });
 });
