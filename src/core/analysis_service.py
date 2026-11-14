@@ -33,8 +33,11 @@ import numpy as np
 import pandas as pd
 
 from config.config import SAMPLES_DIR, load_config
-from src.analysis.logger import ResultLogger
-from src.pipeline import TrackingPipeline
+from src.analysis.logger import (
+    CALIBRATION_SNAPSHOT_VERSION,
+    ResultLogger,
+)
+from src.pipeline import FrameResult, TrackingPipeline
 from src.video.video_input import VideoSource
 
 # Preview frames are every PREVIEW_STRIDE-th frame, downscaled to this width
@@ -43,11 +46,6 @@ PREVIEW_MAX_W = 640
 PREVIEW_STRIDE = 6
 MAX_PREVIEW_FRAMES = 240
 UPLOAD_MAX_AGE_S = 24 * 3600
-
-# Version of the persisted calibration document. Bumped only when the stored
-# JSON shape changes; readers treat an unknown version as unreadable rather
-# than guessing at its fields.
-CALIBRATION_SNAPSHOT_VERSION = 1
 
 # Flat per-observation schema shared by tables, CSV export and the DB row
 # mapper. `rules_json` holds the structured rule evidence for one row.
@@ -155,10 +153,13 @@ def cleanup_stale_uploads(output_dir: Path) -> int:
 
 
 def is_synthetic_source(path: Path | str) -> bool:
-    """Bundled sample videos are synthetic - disclosed wherever shown."""
+    """Bundled sample videos are synthetic - disclosed wherever shown.
+
+    Webcam indexes are integers and are never synthetic.
+    """
     try:
         return Path(path).resolve().parent == Path(SAMPLES_DIR).resolve()
-    except OSError:
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -182,7 +183,9 @@ def run_analysis(src: str, source_label: str, source_kind: str,
                  max_frames: int | None, session: str,
                  progress: Callable[[int, int], None] | None = None,
                  stage: Callable[[str], None] | None = None,
-                 should_stop: Callable[[], bool] | None = None) -> SessionResult:
+                 should_stop: Callable[[], bool] | None = None,
+                 on_frame: Callable[[FrameResult, float], None] | None = None,
+                 loop: bool = False) -> SessionResult:
     """Process a video through the tracking pipeline.
 
     `progress(done, total)` is invoked every few frames with real counts;
@@ -191,6 +194,10 @@ def run_analysis(src: str, source_label: str, source_kind: str,
       * `stage(name)` reports the real phase: opening / processing / summarising.
       * `should_stop()` is polled once per frame; returning True raises
         `AnalysisCancelled` so a background job can stop cooperatively.
+      * `on_frame(result, fps)` receives each real frame result; the CLI uses
+        it for the annotated video and console feed without duplicating the
+        analysis loop.
+      * `loop` forwards to VideoSource for the CLI's `--loop` mode.
     Returns a SessionResult whose `error` is a friendly message on failure.
     """
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -200,7 +207,7 @@ def run_analysis(src: str, source_label: str, source_kind: str,
     if stage is not None:
         stage("opening")
     try:
-        with VideoSource(src=src) as vs:
+        with VideoSource(src=src, loop=loop) as vs:
             fps = float(vs.fps)
             total = vs.frame_count() or 0
             if max_frames:
@@ -249,6 +256,8 @@ def run_analysis(src: str, source_label: str, source_kind: str,
                         "why": e.get("why", ""),
                     })
                 processed += 1
+                if on_frame is not None:
+                    on_frame(res, fps)
                 if progress and (processed % 10 == 0 or processed == 1):
                     progress(processed, total)
                 if max_frames and processed >= max_frames:

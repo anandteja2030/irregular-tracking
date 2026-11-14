@@ -7,15 +7,13 @@ Usage:
     .venv/bin/python -m scripts.run_pipeline clip.mp4 --save output/out.mp4
 
 Writes per-session SQLite logs to data/app_data.db and an annotated video if
---save is given. On a headless box the last frame snapshot is always written
-to output/last_frame.png so you can see what the annotator produced.
+--save is given. A run is persisted only after it finishes successfully, using
+the same `save_session_to_db` path as the API and Streamlit.
 """
 from __future__ import annotations
 
 import argparse
 import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Allow `python scripts/run_pipeline.py` from any working directory.
@@ -25,14 +23,10 @@ if str(_ROOT) not in sys.path:
 
 import cv2
 
-from config.config import load_config
-from src.analysis.logger import ResultLogger
-from src.pipeline import TrackingPipeline
-from src.ui.session import is_synthetic_source
-from src.video.video_input import VideoSource
+from src.core.analysis_service import run_analysis, save_session_to_db
 
 
-def main() -> None:
+def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("source", help="webcam index (0,1,...) or video file path")
     ap.add_argument("--save", default=None, help="write annotated video here")
@@ -40,69 +34,57 @@ def main() -> None:
     args = ap.parse_args()
 
     src: int | str = int(args.source) if args.source.isdigit() else args.source
-    cfg = load_config()
     session = args.source.split("/")[-1] if isinstance(src, str) else "webcam"
-    logger = ResultLogger(cfg.paths.db, session=session)
+    source_kind = "webcam" if isinstance(src, int) else "file"
     writer = None
-    out_w = out_h = 0                 # filled from the first processed frame
-    started_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    t0 = time.monotonic()
+    announced = False
+
+    def on_frame(result, fps: float) -> None:
+        """Keep the CLI's live console feed and optional annotated video."""
+        nonlocal writer, announced
+        if not announced:
+            print(f"source: {source_kind}  fps={fps:.1f}")
+            announced = True
+        if args.save:
+            if writer is None:
+                height, width = result.annotated_bgr.shape[:2]
+                writer = cv2.VideoWriter(
+                    args.save,
+                    cv2.VideoWriter_fourcc("m", "p", "4", "v"),
+                    fps, (width, height))
+            writer.write(result.annotated_bgr)
+        if result.frame_idx % int(max(1.0, fps)) == 0:      # ~1 Hz console feed
+            n_anom = sum(e["level"] != "Normal" for e in result.entries)
+            print(f"frame {result.frame_idx:4d}  dets={result.n_detections} "
+                  f"tracks={len(result.entries)} anomalous_now={n_anom} "
+                  f"calibrated={result.calibrated}")
 
     try:
-        try:
-            with VideoSource(src=src, loop=args.loop) as vs:
-                pipeline = TrackingPipeline(session=session, logger=logger)
-                print(f"source: {vs.source_kind()}  fps={vs.fps:.1f}")
-                # Re-running the same source replaces its rows instead of
-                # appending a second copy of every observation.
-                logger.clear_session_events(session)
-                logger.clear_session_summaries(session)
-                for vf in vs:
-                    res = pipeline.process_frame(vf.bgr, vf.index, vf.fps)
-                    out_h, out_w = res.annotated_bgr.shape[:2]
-                    if args.save:
-                        if writer is None:
-                            writer = cv2.VideoWriter(
-                                args.save,
-                                cv2.VideoWriter_fourcc("m", "p", "4", "v"),
-                                vs.fps, (res.annotated_bgr.shape[1],
-                                         res.annotated_bgr.shape[0]))
-                        writer.write(res.annotated_bgr)
-                    if vf.index % int(max(1.0, vs.fps)) == 0:  # ~1 Hz console feed
-                        n_anom = sum(e["level"] != "Normal" for e in res.entries)
-                        print(f"frame {vf.index:4d}  dets={res.n_detections} "
-                              f"tracks={len(res.entries)} anomalous_now={n_anom} "
-                              f"calibrated={res.calibrated}")
-                pipeline.summarize_tracks(vs.fps)
-                last = pipeline.tracker.all_time_tracks()
-                logger.log_run({
-                    "session": session, "source": str(args.source),
-                    "kind": vs.source_kind(),
-                    "synthetic": bool(isinstance(src, str)
-                                      and is_synthetic_source(src)),
-                    "frames": pipeline.n_frames,
-                    "width": out_w, "height": out_h,
-                    "fps": float(vs.fps),
-                    "wall_s": round(time.monotonic() - t0, 2),
-                    "max_frames": None,
-                    "started_ts": started_ts,
-                    "ended_ts": datetime.now(timezone.utc).isoformat(
-                        timespec="seconds"),
-                })
-                print(f"done: frames={pipeline.n_frames} "
-                      f"total_tracks={len(last)}")
-        except (OSError, TypeError, cv2.error, ValueError) as exc:
-            # Friendly invalid-input handling: no traceback, a stable exit code.
-            print(f"error: cannot read source {args.source!r}: {exc}",
+        result = run_analysis(
+            src, str(args.source), source_kind, None, session,
+            on_frame=on_frame, loop=args.loop)
+
+        if result.error:
+            print(f"error: cannot read source {args.source!r}: {result.error}",
                   file=sys.stderr)
             print("hint: pass an existing video file (mp4/avi/mov/mkv) "
                   "or a webcam index such as 0", file=sys.stderr)
-            sys.exit(2)
+            return 2
+
+        try:
+            save_session_to_db(result)
+        except Exception as exc:                            # noqa: BLE001
+            print(f"error: results could not be stored: {exc}",
+                  file=sys.stderr)
+            return 1
+
+        print(f"done: frames={result.frames_processed} "
+              f"total_tracks={len(result.track_points)}")
+        return 0
     finally:
         if writer is not None:
             writer.release()
-        logger.close()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

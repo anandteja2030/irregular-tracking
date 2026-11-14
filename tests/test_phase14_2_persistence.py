@@ -7,25 +7,36 @@ reconstructed from event scores.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
+import sys
 import threading
+from pathlib import Path
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from config.config import load_config
+from scripts.run_pipeline import main as cli_main
 from src.analysis.calibration import SceneStats
-from src.analysis.logger import SCHEMA_VERSION, ResultLogger
+from src.analysis.logger import (
+    CALIBRATION_SNAPSHOT_VERSION,
+    SCHEMA_VERSION,
+    SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS,
+    ResultLogger,
+)
 from src.api import repository as repo
 from src.api.main import app
 from src.core.analysis_service import (
-    CALIBRATION_SNAPSHOT_VERSION,
     OBS_COLS,
     TRACK_COLS,
     SessionResult,
     save_session_to_db,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
+CLI_SAMPLE = ROOT / "samples" / "anomaly_clip.mp4"
 
 
 @pytest.fixture()
@@ -130,6 +141,7 @@ def test_points_and_snapshot_are_persisted(db, client):
     assert calibration["available"] is True
     assert calibration["persisted"] is True
     assert calibration["snapshot_version"] == CALIBRATION_SNAPSHOT_VERSION
+    assert CALIBRATION_SNAPSHOT_VERSION in SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS
     assert calibration["captured_ts"] == "2026-11-09T00:00:04+00:00"
     assert calibration["samples"] == 8 and calibration["tracks"] == 2
     assert calibration["observed_seconds"] == 0.8
@@ -412,3 +424,132 @@ def test_points_for_an_unknown_session_are_rejected(db):
         assert log.session_points("ghost") == []
     finally:
         log.close()
+
+
+# --------------------------------------------------- snapshot version checks
+def _set_snapshot(db_path, session: str, *, version=..., payload=None) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        if payload is not None:
+            conn.execute(
+                "UPDATE calibration_snapshots SET payload = ? WHERE session = ?",
+                (payload, session))
+        if version is not ...:
+            conn.execute(
+                "UPDATE calibration_snapshots SET schema_version = ?"
+                " WHERE session = ?", (version, session))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_unknown_snapshot_version_is_not_interpreted(db, client):
+    save_session_to_db(make_result("future_snapshot", scene_stats=scene()))
+    _set_snapshot(db, "future_snapshot", version=999)
+
+    body = client.get("/api/v1/sessions/future_snapshot/scene").json()
+    calibration = body["calibration"]
+    assert calibration["available"] is False
+    assert calibration["persisted"] is False
+    assert calibration["snapshot_version"] is None
+    assert "999" in calibration["reason"]
+    assert "not supported" in calibration["reason"]
+    assert body["source"] == "derived_observations"
+    assert body["speed_baseline"]["source"] == "derived_event_observations"
+
+
+def test_missing_snapshot_version_is_not_interpreted(db, client):
+    save_session_to_db(make_result("missing_version", scene_stats=scene()))
+    stale = json.dumps({"calibration": {"ready": True, "n_samples": 8},
+                        "parameters": {}})
+    conn = sqlite3.connect(db)
+    try:
+        # Simulate an older/foreign payload whose version column was never set.
+        conn.execute("DROP TABLE calibration_snapshots")
+        conn.execute(
+            "CREATE TABLE calibration_snapshots ("
+            "session TEXT PRIMARY KEY, schema_version INTEGER,"
+            " captured_ts TEXT NOT NULL, payload TEXT NOT NULL)")
+        conn.execute(
+            "INSERT INTO calibration_snapshots"
+            " (session, schema_version, captured_ts, payload)"
+            " VALUES (?, NULL, ?, ?)",
+            ("missing_version", "2026-11-09T00:00:04+00:00", stale))
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get("/api/v1/sessions/missing_version/scene").json()
+    calibration = body["calibration"]
+    assert calibration["available"] is False
+    assert calibration["persisted"] is False
+    assert "no schema version" in calibration["reason"]
+    assert body["source"] == "derived_observations"
+
+
+def test_malformed_snapshot_payload_is_not_interpreted(db, client):
+    save_session_to_db(make_result("broken_payload", scene_stats=scene()))
+    _set_snapshot(db, "broken_payload", payload="{not valid json")
+
+    body = client.get("/api/v1/sessions/broken_payload/scene").json()
+    calibration = body["calibration"]
+    assert calibration["available"] is False
+    assert calibration["persisted"] is False
+    assert "malformed JSON" in calibration["reason"]
+    assert body["source"] == "derived_observations"
+
+
+def test_legacy_database_without_snapshot_tables_reads_safely(db):
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("CREATE TABLE run_stats (session TEXT PRIMARY KEY,"
+                     " source TEXT)")
+        conn.execute("INSERT INTO run_stats(session, source)"
+                     " VALUES ('legacy', 'sample')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert repo.calibration_snapshot("legacy") is None
+    assert repo.read_calibration_snapshot("legacy") == (None, None)
+    assert repo.session_point_count("legacy") == 0
+    assert repo.trajectory_points("legacy") == []
+
+
+# ---------------------------------------------------------- CLI persistence
+def test_cli_completion_persists_and_is_api_readable(db, client,
+                                                     monkeypatch, capsys):
+    assert CLI_SAMPLE.is_file(), f"missing sample video {CLI_SAMPLE}"
+    monkeypatch.setattr(sys, "argv", ["run_pipeline", str(CLI_SAMPLE)])
+
+    assert cli_main() == 0
+    output = capsys.readouterr().out
+    assert "done: frames=" in output
+
+    session = CLI_SAMPLE.name
+    points = repo.trajectory_points(session)
+    assert points, "the CLI did not persist trajectory points"
+    snapshot, problem = repo.read_calibration_snapshot(session)
+    assert problem is None
+    assert snapshot is not None
+    assert snapshot["schema_version"] == CALIBRATION_SNAPSHOT_VERSION
+
+    detail = client.get(f"/api/v1/sessions/{session}").json()
+    assert detail["artifacts"]["retained"] is False
+    assert detail["artifacts"]["trajectories"] is True
+    assert detail["artifacts"]["scene_calibration"] is True
+
+    tracks = client.get(f"/api/v1/sessions/{session}/tracks").json()["tracks"]
+    assert tracks
+    track_id = tracks[0]["track_id"]
+    trajectory = client.get(
+        f"/api/v1/sessions/{session}/tracks/{track_id}/trajectory").json()
+    assert trajectory["available"] is True
+    assert trajectory["source"] == "persisted"
+    assert trajectory["points"]
+
+    scene_body = client.get(f"/api/v1/sessions/{session}/scene").json()
+    assert scene_body["source"] == "run_calibration"
+    assert scene_body["calibration"]["persisted"] is True
+    assert scene_body["calibration"]["snapshot_version"] == \
+        CALIBRATION_SNAPSHOT_VERSION

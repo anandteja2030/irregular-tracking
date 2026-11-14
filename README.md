@@ -38,7 +38,8 @@ FastAPI — src/api
   ├─ uploads.py     streaming upload validation (extension → MIME → magic
   │                 bytes → container match → real OpenCV decode)
   ├─ session_store.py  bounded in-process retention of preview JPEGs,
-  │                 trajectories, structured evidence and calibration
+  │                 structured evidence, and live trajectory/calibration
+  │                 enrichments (durable copies live in SQLite)
   ├─ repository.py  read-only SQL aggregates over the existing schema
   └─ analytics.py   payload builders shared by routes and reports.py
 
@@ -46,12 +47,16 @@ Engine — unchanged: src/video → src/tracking → src/analysis → src/anomal
          → src/pipeline, writing data/app_data.db
 ```
 
-One analysis job decodes frames, tracks them, scores every observation
-(calibrated rules + Isolation Forest + scene-relative), persists the rows under
-its own server-generated session id, and only then keeps the extra in-memory
-artifacts (preview frames, centroid trajectories, structured rule evidence).
-SQLite is always the source of truth; in-memory data is an enrichment layer
-that is reported as unavailable once it is gone.
+One analysis run decodes frames, tracks them, scores every observation
+(calibrated rules + Isolation Forest + scene-relative), and persists the rows
+under its own session id. Completed API jobs, saved Streamlit sessions and CLI
+runs all store their observation centroids in `track_points` and a versioned
+calibration snapshot in `calibration_snapshots`. SQLite is the durable source
+of truth for those persisted values. For the current API process, preview
+frames, structured rule evidence, and in-process copies of trajectories and
+calibration may also remain available as bounded enrichment under the existing
+retention behavior; those copies are temporary and disappear on restart, while
+the SQLite rows remain readable.
 
 ### Prerequisites
 
@@ -72,15 +77,19 @@ python3 -m venv .venv
 ### Database initialisation and schema
 
 `data/app_data.db` is created automatically the first time the engine or the
-logger writes. There is no migration command: `src/analysis/logger.py` creates
-its tables with `CREATE TABLE IF NOT EXISTS`, and `ground_truth.SCHEMA` creates
-the label table on first use.
+logger writes. There is no manual migration command: `src/analysis/logger.py`
+creates its tables with `CREATE TABLE IF NOT EXISTS` and records the persistence
+schema version, so opening an older database adds missing tables and indexes
+without rewriting existing rows. `ground_truth.SCHEMA` creates the label table
+on first use.
 
 | Table | Contents |
 | --- | --- |
 | `run_stats` | one row per run: source, kind, synthetic flag, frames, resolution, fps, wall time |
 | `track_events` | one row per tracked observation: level, fused/rule/ML/scene scores, speed, heading, explanation |
 | `track_summaries` | one row per track: colour, shape, duration, mean/max speed, path length, straightness |
+| `track_points` | one row per observed centroid: track, frame, time, x/y, level, speed and direction; primary key `(session, track_id, frame_idx)` |
+| `calibration_snapshots` | one versioned JSON snapshot per session: calibration status, speed/direction baseline, captured timestamp and calibration parameters |
 | `ground_truth` | per-observation labels (`Normal`/`Anomaly`); empty until labels are written |
 
 To start from a clean store, stop the API and Streamlit, move
@@ -154,15 +163,22 @@ process-local and reset on restart, which `/system` reports explicitly.
 ### Current API/console limitations
 
 - **Trajectories are persisted.** Every observation's real centroid is written
-  to the indexed `track_points` table when a session completes, so historical
-  sessions return the same paths after a restart. Sessions analysed before this
-  storage existed (or tracks with no observations) report an unavailable reason
-  instead of a reconstructed path.
+  to the indexed `track_points` table when a session completes, including CLI
+  and Streamlit-saved runs, so historical sessions return the same paths after
+  a restart. Sessions analysed before this storage existed or tracks with no
+  observations report an unavailable reason instead of a reconstructed path.
+  A CLI execution that fails or is interrupted is not persisted as a completed
+  session at all.
 - **Calibration snapshots are persisted.** Completed sessions store a versioned
   JSON snapshot of the calibration status, baseline statistics, direction
-  distribution and thresholds in `calibration_snapshots`. `/scene` prefers that
-  snapshot over the running process's live calibrator; legacy sessions fall
-  back to clearly-labelled observation-derived distributions.
+  distribution and calibration parameters in `calibration_snapshots`. `/scene` prefers that
+  snapshot over the running process's live calibrator. Snapshots with an
+  unknown or missing schema version, or a malformed payload, are reported as
+  unavailable rather than interpreted with current assumptions. Legacy sessions
+  fall back to clearly-labelled observation-derived distributions.
+- **Legacy databases remain readable.** Old sessions keep their events and
+  summaries; they simply have no stored trajectory or calibration snapshot
+  until they are analysed again.
 - **Ground-truth labels cannot be edited from the console.** The evaluation
   surface is read-only: the API reports stored labels, but no write endpoint or
   UI exists yet (the Streamlit Evaluation page can still write labels).
@@ -201,8 +217,10 @@ python3 -m venv .venv
   source prints a friendly `error:` + `hint:` message and exits with code 2
   (CLI), or shows a red error card instead of a traceback (dashboard).
 - Annotated frames + summaries are written under `output/`; SQLite events to
-  `data/app_data.db` and CSV exports on demand. Uploaded videos are saved as
-  `output/upload_*` and cleaned up automatically after 24 h.
+  `data/app_data.db` and CSV exports on demand. A completed CLI run also
+  persists its trajectories and calibration snapshot under the session id
+  (the source filename, or `webcam`), using the same storage API jobs use.
+  Uploaded videos are saved as `output/upload_*` and cleaned up after 24 h.
 
 ## Docker (production)
 
@@ -266,7 +284,7 @@ src/ui/report.py            markdown session report builder
 src/ui/theme.py             dark theme, layout + shared components
 scripts/generate_samples.py synthetic sample videos
 scripts/run_pipeline.py     CLI entry point
-tests/                      pytest suites per phase (176 tests, incl. API)
+tests/                      pytest suites per phase (194 tests, incl. API and restart integration)
 ```
 
 ## Dashboard tour (six pages)
@@ -315,7 +333,7 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 
 ## What is verified vs what is not
 
-**Verified by the test suite (176 tests, all passing):**
+**Verified by the test suite (194 tests, all passing):**
 - video-input contract, preprocessing purity/cleanup, HSV masks incl. red
   wrap-around, shape classification, area filters
 - Kalman constant-velocity convergence, noisy-measurement smoothing,

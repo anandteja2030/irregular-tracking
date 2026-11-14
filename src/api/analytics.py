@@ -42,11 +42,12 @@ EVIDENCE_LIMITATION = (
     "generated explanation. Rule-level evidence is available only for sessions "
     "analysed by this API process.")
 CALIBRATION_LIMITATION = (
-    "No calibration snapshot is stored for this session (snapshots are written "
-    "for sessions analysed since durable calibration storage was added, and "
-    "only when the run produced calibration state). Observation-derived speed "
-    "and direction distributions below are computed from persisted rows and "
-    "are labelled as such.")
+    "No usable calibration snapshot is stored for this session (snapshots are "
+    "written for sessions analysed since durable calibration storage was "
+    "added, only when the run produced calibration state, and only in a schema "
+    "version this build supports). Observation-derived speed and direction "
+    "distributions below are computed from persisted rows and are labelled as "
+    "such.")
 
 
 # --------------------------------------------------------------------- guards
@@ -150,14 +151,14 @@ def _limitations(session: str) -> list[str]:
     art = artifacts(session)
     notes: list[str] = []
     stored_points = repo.session_point_count(session) > 0
-    stored_calibration = repo.calibration_snapshot(session) is not None
+    stored_calibration, snapshot_problem = repo.read_calibration_snapshot(session)
     if art is None:
         notes.append(EVIDENCE_LIMITATION)
         if not stored_points:
             notes.append(TRAJECTORY_LIMITATION)
         notes.append(MEDIA_LIMITATION.format(stride=6))
         if not stored_calibration:
-            notes.append(CALIBRATION_LIMITATION)
+            notes.append(snapshot_problem or CALIBRATION_LIMITATION)
     else:
         notes.append(
             "Structured rule evidence and preview frames for this session are "
@@ -166,7 +167,7 @@ def _limitations(session: str) -> list[str]:
             "persist their trajectory points and calibration snapshot in "
             "SQLite.")
         if not stored_calibration:
-            notes.append(CALIBRATION_LIMITATION)
+            notes.append(snapshot_problem or CALIBRATION_LIMITATION)
     return notes
 
 
@@ -182,7 +183,8 @@ def detail_payload(session: str) -> dict:
                              or repo.session_point_count(session) > 0),
             "structured_evidence": bool(art and art.has_evidence),
             "scene_calibration": (bool(art and art.scene)
-                                  or repo.calibration_snapshot(session) is not None),
+                                  or repo.read_calibration_snapshot(session)[0]
+                                  is not None),
             "preview_frames": len(frames),
         },
         "media": {
@@ -280,7 +282,7 @@ def scene_payload(session: str) -> dict:
     notes: list[str] = []
     # A stored snapshot is this session's own calibration at completion time;
     # it outranks the live calibrator still held in this process.
-    snapshot = repo.calibration_snapshot(session)
+    snapshot, snapshot_problem = repo.read_calibration_snapshot(session)
     persisted = snapshot is not None
     recorded = (snapshot["calibration"] if snapshot
                 else (art.scene if art and art.scene else None))
@@ -291,10 +293,13 @@ def scene_payload(session: str) -> dict:
     if recorded is None:
         calibration = {
             "available": False, "ready": None, "samples": None, "tracks": None,
-            "observed_seconds": None, "reason": CALIBRATION_LIMITATION,
+            "observed_seconds": None,
+            "reason": snapshot_problem or CALIBRATION_LIMITATION,
             "persisted": False, "captured_ts": None,
             "snapshot_version": None, "parameters": None,
         }
+        if snapshot_problem:
+            notes.append(snapshot_problem)
         notes.append(
             "Speed distribution and directions below are derived from this "
             "session's persisted observations, not from the calibrator's "
@@ -348,6 +353,8 @@ def scene_payload(session: str) -> dict:
             "source": "run_calibration",
         }
         source = "run_calibration"
+        if snapshot_problem:
+            notes.append(snapshot_problem)
         if persisted:
             notes.append(
                 f"Calibration is this session's persisted snapshot (schema "

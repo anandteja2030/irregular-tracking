@@ -104,6 +104,12 @@ CREATE INDEX IF NOT EXISTS idx_calibration_captured
 # `CREATE TABLE/INDEX IF NOT EXISTS` statements above plus `_migrate_schema`.
 SCHEMA_VERSION = 2
 
+# Version of the persisted calibration document shape. Increment only when the
+# stored JSON changes; readers validate this before interpreting any fields.
+CALIBRATION_SNAPSHOT_VERSION = 1
+SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS = frozenset(
+    {CALIBRATION_SNAPSHOT_VERSION})
+
 # Older databases keyed track_summaries by track_id alone, so a second
 # session silently overwrote the first session's rows. This rebuild keeps
 # the data and upgrades the key to (session, track_id).
@@ -312,12 +318,19 @@ class ResultLogger:
         if row is None:
             return None
         try:
+            version = int(row[0])
+        except (TypeError, ValueError):
+            return None
+        if version not in SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS:
+            return None
+        try:
             payload = json.loads(row[2])
         except (TypeError, ValueError):
             return None
-        if not isinstance(payload, dict) or "calibration" not in payload:
+        if not isinstance(payload, dict) or not isinstance(
+                payload.get("calibration"), dict):
             return None
-        return {"schema_version": int(row[0]), "captured_ts": row[1],
+        return {"schema_version": version, "captured_ts": row[1],
                 "calibration": payload["calibration"],
                 "parameters": payload.get("parameters") or {}}
 

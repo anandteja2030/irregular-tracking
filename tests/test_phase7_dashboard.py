@@ -690,12 +690,20 @@ def test_cli_rerun_replaces_rows_instead_of_duplicating(tmp_path):
             frames = con.execute(
                 "SELECT frames FROM run_stats WHERE session=?",
                 (session,)).fetchone()[0]
+            points = con.execute(
+                "SELECT COUNT(*) FROM track_points WHERE session=?",
+                (session,)).fetchone()[0]
+            snapshots = con.execute(
+                "SELECT COUNT(*) FROM calibration_snapshots WHERE session=?",
+                (session,)).fetchone()[0]
         finally:
             con.close()
         assert rows > 0             # the clip really produced observations
         assert dups == 0            # second run replaced, not appended
         assert runs == 1            # run stats recorded (one row per session)
         assert frames == 30         # 2.0 s @ 15 fps actually processed
+        assert points > 0           # CLI trajectories are persisted
+        assert snapshots == 1       # and the calibration snapshot is idempotent
     finally:
         _cleanup()                  # leave the shared DB as we found it
 

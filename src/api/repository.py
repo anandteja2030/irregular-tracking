@@ -29,6 +29,10 @@ import numpy as np
 
 from config.config import load_config
 from src.analysis.features import _octant
+from src.analysis.logger import (
+    CALIBRATION_SNAPSHOT_VERSION,
+    SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS,
+)
 
 LEVELS = ("Normal", "Suspicious", "Irregular")
 ANOMALY_LEVELS = ("Suspicious", "Irregular")
@@ -702,28 +706,55 @@ def trajectory_points(session: str,
             for row in rows]
 
 
-def calibration_snapshot(session: str) -> dict | None:
-    """Persisted versioned calibration document, or None when unreadable."""
+def read_calibration_snapshot(session: str) -> tuple[dict | None, str | None]:
+    """Persisted snapshot plus an explanation when it cannot be used.
+
+    A missing table or row is an ordinary "no snapshot" case (None, None).
+    Unknown versions, missing versions and malformed payloads are never
+    interpreted with the current field assumptions: they return (None, reason)
+    so the API can state why no calibration is available.
+    """
     with connect() as conn:
         if conn is None or not _has_table(conn, "calibration_snapshots"):
-            return None
+            return None, None
         row = conn.execute(
             "SELECT schema_version, captured_ts, payload"
             " FROM calibration_snapshots WHERE session = ?",
             (session,)).fetchone()
     if row is None:
-        return None
+        return None, None
+    raw_version = row["schema_version"]
+    if raw_version is None:
+        return None, ("The stored calibration snapshot has no schema version, "
+                      "so it cannot be interpreted safely.")
+    try:
+        version = int(raw_version)
+    except (TypeError, ValueError):
+        return None, ("The stored calibration snapshot has an unreadable "
+                      "schema version, so it cannot be interpreted safely.")
+    if version not in SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS:
+        return None, (
+            f"Calibration snapshot schema version {version} is not supported "
+            f"by this build (supported version: "
+            f"{CALIBRATION_SNAPSHOT_VERSION}); it was not interpreted.")
     try:
         payload = json.loads(row["payload"])
     except (TypeError, ValueError):
-        return None
+        return None, ("The stored calibration snapshot is unreadable "
+                      "(malformed JSON payload); it was not interpreted.")
     if not isinstance(payload, dict) or not isinstance(
             payload.get("calibration"), dict):
-        return None
-    return {"schema_version": int(row["schema_version"]),
-            "captured_ts": row["captured_ts"],
-            "calibration": payload["calibration"],
-            "parameters": payload.get("parameters") or {}}
+        return None, ("The stored calibration snapshot has no readable "
+                      "calibration object; it was not interpreted.")
+    return ({"schema_version": version,
+             "captured_ts": row["captured_ts"],
+             "calibration": payload["calibration"],
+             "parameters": payload.get("parameters") or {}}, None)
+
+
+def calibration_snapshot(session: str) -> dict | None:
+    """Persisted supported calibration document, or None when unusable."""
+    return read_calibration_snapshot(session)[0]
 
 
 # ---------------------------------------------------------------- evaluation
