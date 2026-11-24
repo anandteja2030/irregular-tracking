@@ -328,11 +328,11 @@ describe("scene intelligence page", () => {
     expect(screen.getByText("100%")).toBeTruthy();
     expect(document.querySelector(".scene-dominant__chip")?.textContent).toBe("E");
     expect(await screen.findByText("80.0 px/s")).toBeTruthy();
-    expect(screen.getByText(/Percentile envelope only/)).toBeTruthy();
+    expect(document.querySelector(".scene-envelope")).toBeTruthy();
 
     const map = await screen.findByRole("img", { name: /Retained centroid density/ });
     expect(map).toBeTruthy();
-    expect(screen.getByText(/Counts of retained centroid points per 24×14 frame cell/)).toBeTruthy();
+    expect(document.querySelector(".scene-map__stamp")?.textContent).toContain("cells touched");
 
     const trackLink = await screen.findByRole("link", { name: /T01.*points/ });
     expect(trackLink.getAttribute("href")).toContain(`session=${SESSION}`);
@@ -456,7 +456,8 @@ describe("scene intelligence page", () => {
     expect(await screen.findByText("Scene intelligence unavailable")).toBeTruthy();
     expect(screen.getByText("Scene read failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Retry request/ })).toBeTruthy();
-    expect(screen.getByText(/No fallback baseline/)).toBeTruthy();
+    // No lane, map or fallback baseline is drawn when the scene read fails.
+    expect(document.querySelector(".scene-spatial")).toBeNull();
     expect(screen.queryByText("Calibration ready")).toBeNull();
   });
 
@@ -565,8 +566,8 @@ describe("scene intelligence page", () => {
     expect(gates.length).toBe(3);
     expect([...gates].every((gate) => !gate.classList.contains("is-met"))).toBe(true);
     expect(screen.getAllByText("below gate").length).toBe(3);
-    expect(screen.getByText(/is the limiting gate/)).toBeTruthy();
-    expect(screen.queryByText(/calibration failure/)).toBeTruthy();
+    expect(screen.getByText(/limiting gate: Observed seconds/)).toBeTruthy();
+    expect(screen.queryByText(/calibration failure/i)).toBeNull();
   });
 
   it("draws the direction rose and speed cards from persisted aggregates", async () => {

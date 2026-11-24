@@ -150,23 +150,19 @@ describe("command overview", () => {
     expect(screen.getByText("v0.10.0")).toBeTruthy();
   });
 
-  it("keeps every vitals measurement and hint intact", async () => {
+  it("keeps every vitals measurement intact", async () => {
     vi.stubGlobal("fetch", onlineFetch());
     renderOverview();
 
     await waitFor(() => expect(vitalsGroup().querySelectorAll(".metric-card")).toHaveLength(5));
 
     expect(vitalsCard("Uptime").textContent).toContain("1h 5m");
-    expect(vitalsCard("Uptime").textContent).toContain("current process");
     expect(vitalsCard("Python").textContent).toContain("3.12.3");
-    expect(vitalsCard("Python").textContent).toContain("CPython");
     expect(vitalsCard("Session store").textContent).toContain("2.00 KB");
-    expect(vitalsCard("Session store").textContent).toContain("SQLite present");
     expect(vitalsCard("Sample sources").textContent).toContain("2");
     expect(vitalsCard("Sample sources").textContent).toContain("of 3");
-    expect(vitalsCard("Sample sources").textContent).toContain("decodable clips");
     expect(vitalsCard("Sessions").textContent).toContain("2");
-    expect(vitalsCard("Sessions").textContent).toContain("persisted runs");
+    expect(vitalsGroup().querySelectorAll(".metric-card__hint")).toHaveLength(0);
     expect(vitalsGroup().querySelectorAll('[data-state="ready"]')).toHaveLength(5);
   });
 
@@ -190,7 +186,8 @@ describe("command overview", () => {
       const sessionLinks = screen
         .getAllByRole("link")
         .filter((link) => link.getAttribute("href")?.startsWith("/tracks?session="));
-      expect(sessionLinks).toHaveLength(2);
+      // Two ledger rows plus the "Open this run in Track Explorer" action.
+      expect(sessionLinks).toHaveLength(3);
     });
 
     // Runtime facts and package inventory both come from /system, not fixtures.
@@ -226,7 +223,7 @@ describe("command overview", () => {
     for (const label of ["Uptime", "Python", "Session store", "Sample sources", "Sessions"]) {
       expect(vitalsCard(label).textContent).toContain("—");
     }
-    expect(screen.getByText(/Runtime readings stay empty/)).toBeTruthy();
+    expect(screen.getByText("Analysis service unreachable.")).toBeTruthy();
     // Nothing pretends to be a zero measurement.
     expect(within(vitalsGroup()).queryByText("0")).toBeNull();
   });

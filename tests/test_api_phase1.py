@@ -1,7 +1,7 @@
 """Phase 1 API tests: health, system, config (get/patch/reset), sources, docs.
 
 The autouse fixture restores the mutable config singleton after every test so
-these cases can never leak settings into the Streamlit/engine suites.
+these cases can never leak settings into the engine/API suites.
 """
 from __future__ import annotations
 
@@ -71,8 +71,8 @@ def test_system_reports_measured_environment(client: TestClient):
 # ------------------------------------------------------------------- config
 def test_get_config_returns_full_document(client: TestClient):
     body = client.get("/config").json()
-    assert body["anomaly"]["threshold_suspicious"] == pytest.approx(0.35)
-    assert body["anomaly"]["threshold_irregular"] == pytest.approx(0.65)
+    assert body["anomaly"]["threshold_suspicious"] == pytest.approx(0.40)
+    assert body["anomaly"]["threshold_irregular"] == pytest.approx(0.75)
     assert sum(body["anomaly"]["weights"].values()) == pytest.approx(1.0)
     assert len(body["color"]["ranges"]) == 6
     assert body["paths"]["db"].endswith("app_data.db")
@@ -83,16 +83,16 @@ def test_get_config_returns_full_document(client: TestClient):
 
 
 def test_patch_applies_to_engine_singleton(client: TestClient):
-    r = client.put("/config", json={"anomaly": {"threshold_suspicious": 0.4}})
+    r = client.put("/config", json={"anomaly": {"threshold_suspicious": 0.45}})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["changed"] is True
     assert body["applied"] == ["anomaly.threshold_suspicious"]
-    assert body["config"]["anomaly"]["threshold_suspicious"] == pytest.approx(0.4)
+    assert body["config"]["anomaly"]["threshold_suspicious"] == pytest.approx(0.45)
     # The engine reads the same object, so the patch is really in effect.
-    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.4)
+    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.45)
     assert client.get("/config").json()["anomaly"]["threshold_suspicious"] == \
-        pytest.approx(0.4)
+        pytest.approx(0.45)
 
 
 def test_patch_rejects_threshold_ordering_and_changes_nothing(client: TestClient):
@@ -101,14 +101,14 @@ def test_patch_rejects_threshold_ordering_and_changes_nothing(client: TestClient
     error = r.json()["error"]
     assert error["code"] == "config_invalid"
     assert error["detail"]
-    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.35)
+    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.40)
 
 
 def test_patch_rejects_unknown_section(client: TestClient):
     r = client.put("/config", json={"nope": {"x": 1}})
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "config_invalid"
-    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.35)
+    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.40)
 
 
 def test_patch_rejects_unnormalised_fusion_weights(client: TestClient):
@@ -131,14 +131,27 @@ def test_patch_rejects_read_only_paths(client: TestClient):
 
 
 def test_reset_restores_defaults(client: TestClient):
-    client.put("/config", json={"anomaly": {"threshold_suspicious": 0.4}})
+    client.put("/config", json={"anomaly": {"threshold_suspicious": 0.45}})
     r = client.post("/config/reset")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["reset_to_defaults"] is True
     assert body["config"]["anomaly"]["threshold_suspicious"] == \
-        pytest.approx(0.35)
-    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.35)
+        pytest.approx(0.40)
+    assert load_config().anomaly.threshold_suspicious == pytest.approx(0.40)
+
+
+def test_reset_preserves_read_only_paths(client: TestClient, tmp_path):
+    cfg = load_config()
+    original = cfg.paths.db
+    custom = tmp_path / "custom.db"
+    cfg.paths.db = custom
+    try:
+        body = client.post("/config/reset").json()
+        assert body["config"]["paths"]["db"] == str(custom)
+        assert cfg.paths.db == custom
+    finally:
+        cfg.paths.db = original
 
 
 # ------------------------------------------------------------------ sources

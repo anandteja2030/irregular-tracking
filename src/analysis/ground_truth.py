@@ -1,8 +1,8 @@
 """Ground-truth labels for reproducible evaluation.
 
 Labels are stored per observation (session, frame_idx, track_id) with the
-binary vocabulary used by the detector: ``Normal`` or ``Anomaly``.  The
-dashboard's Evaluation page writes them from explicit user input; nothing
+binary vocabulary used by the detector: ``Normal`` or ``Anomaly``. The
+evaluation API writes them from explicit user input; nothing
 here ever invents labels, and metrics are only computed where labels exist.
 """
 from __future__ import annotations

@@ -4,14 +4,16 @@ import type { ResourceState } from "../hooks/useResource";
 import type { SessionDetail, TrackList, ZoneRect } from "../lib/types";
 import {
   densityGrid,
+  regionEvidence,
   spatialPoints,
   zoneActivity,
   zoneLabel,
   type LoadedSceneEvents,
+  type RegionEvidenceRow,
   type SceneTrajectoryLoad,
 } from "../lib/scene";
 import { formatNumber } from "../lib/format";
-import { formatTrackId, trajectoryPaths } from "../lib/tracks";
+import { classLabel, formatTrackId, trajectoryPaths } from "../lib/tracks";
 import { Panel } from "./Panel";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { ArrowRightIcon, ImageIcon, SceneIcon } from "./icons";
@@ -55,6 +57,7 @@ function DensityMap({
   height,
   zones,
   zonesEnabled,
+  classById,
 }: {
   sessionId: string;
   tracks: SceneTrajectoryLoad;
@@ -62,6 +65,7 @@ function DensityMap({
   height: number;
   zones: ZoneRect[];
   zonesEnabled: boolean;
+  classById: Map<number, string>;
 }) {
   const drawable = tracks.tracks.filter((track) => track.available && track.points.length > 0);
   const flattened = useMemo(
@@ -75,8 +79,6 @@ function DensityMap({
   const accentByTrack = new Map(
     drawable.map((track, index) => [track.trackId, TRACK_ACCENTS[index % TRACK_ACCENTS.length]]),
   );
-  const peak = density.peak;
-
   return (
     <div className="scene-map">
       <div className="scene-map__stage">
@@ -168,34 +170,6 @@ function DensityMap({
         </span>
       </div>
 
-      <div className="scene-map__facts">
-        <div className="scene-map__fact">
-          <span className="mini-label">Density basis</span>
-          <p>
-            Counts of retained centroid points per {density.columns}×{density.rows} frame cell.
-            This is not occupancy, dwell time, optical density or a calibrated camera view.
-          </p>
-        </div>
-        <div className="scene-map__fact">
-          <span className="mini-label">Peak cell</span>
-          <p className="mono">
-            {peak
-              ? `x ${formatNumber(peak.x, 0)}–${formatNumber(peak.x + peak.width, 0)} · y ${formatNumber(
-                  peak.y,
-                  0,
-                )}–${formatNumber(peak.y + peak.height, 0)} · ${formatNumber(peak.count)} points`
-              : "No point landed inside the frame bounds."}
-          </p>
-        </div>
-      </div>
-
-      {flattened.excluded > 0 && (
-        <p className="hint hint--flush">
-          {formatNumber(flattened.excluded)} retained coordinates fell outside the recorded
-          source frame and are excluded from the map.
-        </p>
-      )}
-
       <div className="scene-track-legend">
         <span className="mini-label scene-track-legend__title">Retained track paths</span>
         {drawable.map((track) => (
@@ -211,6 +185,9 @@ function DensityMap({
               aria-hidden="true"
             />
             <span className="mono">{formatTrackId(track.trackId)}</span>
+            <span className="scene-track-legend__class">
+              {classById.get(track.trackId) ?? "class n/r"}
+            </span>
             <span className="mono">{formatNumber(track.points.length)} points</span>
             <ArrowRightIcon width={11} height={11} />
           </Link>
@@ -231,15 +208,60 @@ function DensityMap({
             </div>
           ))
         ) : (
-          <p className="hint hint--flush">
-            No zone rectangles are configured. No zone geometry or activity is drawn.
-          </p>
+          <p className="hint hint--flush">No zone rectangles are configured.</p>
         )}
-        <p className="hint hint--flush">
-          Rectangles are configuration, not observed activity. They are drawn only as reference
-          outlines.
-        </p>
       </div>
+    </div>
+  );
+}
+
+function RegionEvidenceTable({ rows }: { rows: RegionEvidenceRow[] }) {
+  const maxPoints = Math.max(0, ...rows.map((row) => row.points));
+  return (
+    <div className="table-wrap">
+      <table className="table table--scene-zones">
+        <thead>
+          <tr>
+            <th>Frame region</th>
+            <th>Positions</th>
+            <th>Objects</th>
+            <th>Elevated positions</th>
+            <th>Measured time</th>
+            <th>First elevated frame</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <td className="mono scene-zone-cell">
+                {row.label}
+                <span className="scene-zone-code mono">{row.code}</span>
+              </td>
+              <td>
+                <span className="scene-dwell">
+                  <span className="scene-dwell__text mono">{formatNumber(row.points)}</span>
+                  <span className="scene-dwell__track" aria-hidden="true">
+                    <span
+                      className="scene-dwell__fill"
+                      style={{
+                        width: `${maxPoints > 0 ? Math.max(2, (row.points / maxPoints) * 100) : 0}%`,
+                      }}
+                    />
+                  </span>
+                </span>
+              </td>
+              <td className="mono">{formatNumber(row.tracks)}</td>
+              <td className="mono">{formatNumber(row.elevated)}</td>
+              <td className="mono">
+                {row.dwellS === null ? "—" : `${row.dwellS.toFixed(1)} s`}
+              </td>
+              <td className="mono">
+                {row.firstElevatedFrame === null ? "—" : `F${row.firstElevatedFrame}`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -324,6 +346,25 @@ export function SceneSpatial({
   zonesEnabled,
 }: SceneSpatialProps) {
   const zoneRows = useMemo(() => zoneActivity(events.data?.rows ?? []), [events.data]);
+  const fps = session.data?.processing.fps ?? null;
+  const classById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const track of tracks.data?.tracks ?? []) {
+      const label = classLabel(track.appearance);
+      if (label) map.set(track.track_id, label);
+    }
+    return map;
+  }, [tracks.data]);
+  const regionRows = useMemo(() => {
+    const width = session.data?.processing.width ?? null;
+    const height = session.data?.processing.height ?? null;
+    if (!width || !height || !trajectories.data) return [];
+    const drawable = trajectories.data.tracks
+      .filter((track) => track.available && track.points.length > 0)
+      .map((track) => ({ trackId: track.trackId, points: track.points }));
+    if (drawable.length === 0) return [];
+    return regionEvidence(drawable, width, height, fps);
+  }, [session.data, trajectories.data, fps]);
 
   let mapBody;
   if (session.status === "error") {
@@ -405,21 +446,8 @@ export function SceneSpatial({
             height={height}
             zones={zones}
             zonesEnabled={zonesEnabled}
+            classById={classById}
           />
-          {trajectories.data.failed > 0 && (
-            <p className="hint hint--flush">
-              {formatNumber(trajectories.data.failed)} of{" "}
-              {formatNumber(trajectories.data.requested)} trajectory requests failed. The map
-              shows only the successful responses.
-            </p>
-          )}
-          {trajectories.data.totalTracks > trajectories.data.requested && (
-            <p className="hint hint--flush">
-              Showing the first {formatNumber(trajectories.data.requested)} tracks by elevated
-              event count; {formatNumber(trajectories.data.totalTracks)} tracks exist in the
-              session. No unrequested coordinates are implied.
-            </p>
-          )}
         </>
       );
     }
@@ -427,7 +455,11 @@ export function SceneSpatial({
 
   return (
     <div className="scene-spatial">
-      <div className="scene-spatial__grid">
+      <div
+        className={`scene-spatial__grid ${
+          zoneRows.length > 0 || regionRows.length > 0 ? "" : "scene-spatial__grid--single"
+        }`.trim()}
+      >
         <Panel
           title="Spatial intelligence"
           sub="Retained centroid density in source-frame coordinates"
@@ -438,8 +470,18 @@ export function SceneSpatial({
 
         <Panel
           title="Zone evidence"
-          sub="Retained evidence on elevated events"
-          actions={<span className="tag">{formatNumber(zoneRows.length)} zones observed</span>}
+          sub={
+            zoneRows.length > 0
+              ? "Retained evidence on elevated events"
+              : "Configured zones are off · measured frame regions shown instead"
+          }
+          actions={
+            <span className="tag">
+              {zoneRows.length > 0
+                ? `${formatNumber(zoneRows.length)} zones observed`
+                : `${formatNumber(regionRows.length)} regions measured`}
+            </span>
+          }
           bodyClassName="panel__body--flush"
         >
           {events.status === "error" ? (
@@ -456,21 +498,9 @@ export function SceneSpatial({
               <LoadingRows rows={4} label="Loading retained zone evidence" />
             </div>
           ) : zoneRows.length > 0 ? (
-            <>
-              <ZoneEvidenceTable sessionId={sessionId} rows={zoneRows} />
-              <div className="panel__pad panel__pad--tight">
-                <p className="hint hint--flush">
-                  Scope: {formatNumber(zoneRows.reduce((sum, row) => sum + row.events, 0))} elevated
-                  events with retained structured zone evidence. Normal observations and
-                  historical rows without evidence cannot contribute to this table.
-                  {events.data?.truncated
-                    ? ` Loaded ${formatNumber(events.data.rows.length)} of ${formatNumber(
-                        events.data.total,
-                      )} reported events; zone evidence covers loaded rows only.`
-                    : ""}
-                </p>
-              </div>
-            </>
+            <ZoneEvidenceTable sessionId={sessionId} rows={zoneRows} />
+          ) : regionRows.length > 0 ? (
+            <RegionEvidenceTable rows={regionRows} />
           ) : !session.data || session.data.artifacts.structured_evidence ? (
             <div className="panel__pad">
               <EmptyState
@@ -479,7 +509,7 @@ export function SceneSpatial({
                 body={
                   zones.length > 0
                     ? "Zones are configured, but no elevated event carries retained zone or dwell evidence. Configuration is not activity."
-                    : "No zones are configured and no elevated event carries retained zone evidence. No zone activity is asserted."
+                    : "No zones are configured and no retained trajectory covers a frame region. No zone activity is asserted."
                 }
                 glyph={<SceneIcon width={17} height={17} />}
               />

@@ -89,6 +89,7 @@ def anomaly_detail(session_id: str, event_id: int) -> dict:
             "track_id": track["track_id"],
             "color": track["appearance"]["color"],
             "shape": track["appearance"]["shape"],
+            "class_name": track["appearance"].get("class_name"),
             "observations": track["observed"]["observations"],
             "anomalies": track["observed"]["anomalies"],
             "worst_level": track["observed"]["worst_level"],

@@ -659,6 +659,7 @@
   overflow-x: hidden;
   padding: 30px 34px 56px;
   scroll-behavior: smooth;
+  overscroll-behavior: contain;
 }
 
 .workspace:focus-visible {

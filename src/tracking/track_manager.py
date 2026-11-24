@@ -33,6 +33,8 @@ class Track:
     kf: KalmanBox
     color: str | None = None
     shape: str = "unknown"
+    class_name: str | None = None      # detected object class ("car", "truck", ...)
+    class_votes: dict = field(default_factory=dict)
     hits: int = 0                      # consecutive matched frames (debounce)
     misses: int = 0                    # consecutive unmatched (coasting) frames
     positions: deque = field(default_factory=lambda: deque(maxlen=400))  # (frame_idx, cx, cy)
@@ -70,6 +72,7 @@ class TrackedObject:
     box_wh: tuple[float, float]
     color: str | None
     shape: str
+    class_name: str | None
     trajectory: list[tuple[int, float, float]]
     confirmed: bool
     misses: int
@@ -91,7 +94,10 @@ class TrackManager:
                        process_noise=self.cfg.kalman_process_noise,
                        measurement_noise=self.cfg.kalman_measurement_noise)
         t = Track(id=self._next_id, kf=kf, color=det.color, shape=det.shape,
+                  class_name=det.class_name,
                   hits=1, misses=0, first_frame=frame_idx, last_frame=frame_idx)
+        if det.class_name:
+            t.class_votes[det.class_name] = 1
         t.positions.append((frame_idx, *det.centroid))
         self._next_id += 1
         return t
@@ -147,6 +153,11 @@ class TrackManager:
                 t.kf.update(d.centroid[0], d.centroid[1], float(d.bbox[2]), float(d.bbox[3]))
                 if d.color is not None:                  # stable colour of blob
                     t.color = d.color
+                if d.class_name:
+                    # Majority vote keeps one occasional mis-read frame from
+                    # renaming a whole track.
+                    t.class_votes[d.class_name] = t.class_votes.get(d.class_name, 0) + 1
+                    t.class_name = max(t.class_votes.items(), key=lambda kv: kv[1])[0]
                 t.shape = d.shape
                 t.hits += 1
                 t.misses = 0
@@ -156,6 +167,20 @@ class TrackManager:
         # 3) new tentative tracks for unmatched detections
         for j, d in enumerate(detections):
             if j in matched_d:
+                continue
+            # A detection that heavily overlaps one already assigned to a track
+            # is the same object seen twice (fragmented mask, colour + motion
+            # paths agreeing). Starting a second track would draw a duplicate
+            # box on one object, so it is dropped instead.
+            duplicate = False
+            for k in matched_d:
+                o = detections[k]
+                iou = self._iou(d.centroid[0], d.bbox[2], d.centroid[1], d.bbox[3],
+                                o.centroid[0], o.bbox[2], o.centroid[1], o.bbox[3])
+                if iou > 0.35:
+                    duplicate = True
+                    break
+            if duplicate:
                 continue
             self.tracks.append(self._new_track(d, frame_idx))
 
@@ -185,6 +210,7 @@ class TrackManager:
             box_wh=t.box_wh,
             color=t.color,
             shape=t.shape,
+            class_name=t.class_name,
             trajectory=list(t.positions),
             confirmed=t.confirmed,
             misses=t.misses,

@@ -20,10 +20,12 @@ import { StatusPill } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { LevelBadge, LevelMeter, Score } from "../components/SessionBits";
 import { StudioIntake, type UploadState } from "../components/StudioIntake";
+import { LiveCameraPanel } from "../components/LiveCameraPanel";
+import { QuantumFlow } from "../components/quantum";
 import { JobConsole } from "../components/JobConsole";
 import { FrameInvestigator } from "../components/FrameInvestigator";
 import { SessionHistoryPanel } from "../components/SessionHistoryPanel";
-import { FilmIcon, ImageIcon, PlayIcon, TrackIcon } from "../components/icons";
+import { FilmIcon, ImageIcon, PlayIcon, RadioIcon, TrackIcon, UploadIcon } from "../components/icons";
 import {
   formatBytes,
   formatDuration,
@@ -35,6 +37,46 @@ import {
 
 const JOB_KEY = "neural-command.job";
 const EMPTY_UPLOAD: UploadState = { status: "idle", record: null, progress: null, error: null };
+
+/** Copy for the live-mode rail. It describes the engine stages; it never adds a
+ * number that the capture did not measure. */
+const LIVE_STEPS = [
+  {
+    title: "Grab one frame",
+    text: "The browser captures the current camera image at up to the target rate and posts it to the same endpoint the file pipeline uses.",
+  },
+  {
+    title: "Detect & track",
+    text: "Saturated colour shapes and moving foreground are detected, then passed through the Kalman/Hungarian tracker so an object keeps one ID while it moves.",
+  },
+  {
+    title: "Score & explain",
+    text: "Rule, Isolation Forest and scene-baseline channels fuse into one score per object per frame, with the reason text kept as evidence.",
+  },
+  {
+    title: "Persist on stop",
+    text: "“Stop & analyze” writes the capture as a session: observations, tracks, events, previews and the scene snapshot.",
+  },
+];
+
+const LIVE_GLOSSARY = [
+  {
+    term: "Objects now",
+    text: "Tracks active in the most recent scored frame — not the number ever seen.",
+  },
+  {
+    term: "Tracks seen",
+    text: "Distinct track IDs the capture created. An object that leaves and returns becomes two IDs.",
+  },
+  {
+    term: "Observations",
+    text: "One object scored in one frame. The level mix and every chart on this page count these.",
+  },
+  {
+    term: "FPS measured",
+    text: "Round trips completed per second. Frames are scored one at a time, so a slow API lowers it instead of dropping frames.",
+  },
+];
 
 type FlowState = "done" | "active" | "idle";
 
@@ -55,6 +97,8 @@ export function VideoStudioPage() {
     reload: reloadSessions,
   } = useSession();
 
+  const [mode, setMode] = useState<"upload" | "live">("upload");
+  const [liveActive, setLiveActive] = useState(false);
   const [upload, setUpload] = useState<UploadState>(EMPTY_UPLOAD);
   const [fileError, setFileError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
@@ -185,13 +229,26 @@ export function VideoStudioPage() {
     }
   };
 
-  const openSession = (sessionId: string) => {
-    select(sessionId);
+  const scrollToResults = () => {
     const target = document.getElementById("studio-results");
     if (target && typeof target.scrollIntoView === "function") {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   };
+
+  const openSession = (sessionId: string) => {
+    select(sessionId);
+    scrollToResults();
+  };
+
+  const handleLiveFinished = useCallback(
+    (sessionId: string) => {
+      reloadSessions();
+      select(sessionId);
+      window.setTimeout(scrollToResults, 60);
+    },
+    [reloadSessions, select],
+  );
 
   const clearJob = () => {
     setJobId(null);
@@ -201,7 +258,8 @@ export function VideoStudioPage() {
     completedRef.current = null;
   };
 
-  const busy = upload.status === "uploading" || starting || Boolean(job && isActiveState(job.state));
+  const busy =
+    upload.status === "uploading" || starting || liveActive || Boolean(job && isActiveState(job.state));
   const topEvents = (events.data?.anomalies ?? []).slice(0, 5);
   const mediaMissing = detail.data ? !detail.data.media.available : false;
 
@@ -212,22 +270,54 @@ export function VideoStudioPage() {
     {
       id: "intake",
       label: "Intake",
-      meta: upload.record
-        ? upload.record.filename
-        : upload.status === "uploading"
-          ? "Streaming to the API"
-          : upload.status === "error"
-            ? "Upload rejected"
-            : "Awaiting a source",
-      state: upload.status === "uploading" ? "active" : uploadDone ? "done" : "idle",
-      word: upload.status === "uploading" ? "in progress" : uploadDone ? "complete" : "pending",
+      meta:
+        mode === "live"
+          ? liveActive
+            ? "Webcam capture running"
+            : "Live camera"
+          : upload.record
+            ? upload.record.filename
+            : upload.status === "uploading"
+              ? "Streaming to the API"
+              : upload.status === "error"
+                ? "Upload rejected"
+                : "Awaiting a source",
+      state:
+        mode === "live"
+          ? liveActive
+            ? "active"
+            : "idle"
+          : upload.status === "uploading"
+            ? "active"
+            : uploadDone
+              ? "done"
+              : "idle",
+      word:
+        mode === "live"
+          ? liveActive
+            ? "in progress"
+            : "pending"
+          : upload.status === "uploading"
+            ? "in progress"
+            : uploadDone
+              ? "complete"
+              : "pending",
     },
     {
       id: "analysis",
       label: "Analysis",
-      meta: job ? stageLabel(job.stage) : jobId ? "Reading job status" : "No job started",
-      state: busy ? "active" : jobTerminal ? "done" : "idle",
-      word: busy ? "in progress" : jobTerminal ? "complete" : "pending",
+      meta:
+        mode === "live"
+          ? liveActive
+            ? "Scoring frames live"
+            : "Starts with the camera"
+          : job
+            ? stageLabel(job.stage)
+            : jobId
+              ? "Reading job status"
+              : "No job started",
+      state: busy ? "active" : jobTerminal || (mode === "live" && selectedId) ? "done" : "idle",
+      word: busy ? "in progress" : jobTerminal || (mode === "live" && selectedId) ? "complete" : "pending",
     },
     {
       id: "inspect",
@@ -244,7 +334,7 @@ export function VideoStudioPage() {
       <PageHeader
         eyebrow="Intake · analysis"
         title="Video Studio"
-        lede="Upload a clip or run a bundled sample through the existing engine. Progress, counts and previews below come from the API exactly as reported — no simulated runs, no placeholder metrics."
+        lede="Upload a clip, run a sample, or track a live camera."
         aside={
           <>
             <StatusPill tone="accent" size="sm" icon={<FilmIcon width={11} height={11} />}>
@@ -261,6 +351,69 @@ export function VideoStudioPage() {
           </>
         }
       />
+
+      <section className="section" aria-label="How analysis works">
+        <Panel
+          title="How a clip becomes intelligence"
+          sub="Five engine stages · identical for files, samples and live frames"
+        >
+          <QuantumFlow />
+        </Panel>
+      </section>
+
+      <section className="mode-choice" aria-label="Choose an input source">
+        <button
+          type="button"
+          className="mode-option"
+          aria-pressed={mode === "upload"}
+          onClick={() => setMode("upload")}
+          disabled={liveActive}
+        >
+          <span className="mode-option__glyph">
+            <UploadIcon width={18} height={18} />
+          </span>
+          <span className="mode-option__body">
+            <span className="mode-option__title">Upload a video</span>
+            <span className="mode-option__text">
+              Analyse a recorded clip (mp4, avi, mov, mkv) or a bundled sample.
+            </span>
+          </span>
+          <span className="mode-option__state mono">{mode === "upload" ? "selected" : "choose"}</span>
+        </button>
+        <button
+          type="button"
+          className="mode-option"
+          aria-pressed={mode === "live"}
+          onClick={() => setMode("live")}
+        >
+          <span className="mode-option__glyph">
+            <RadioIcon width={18} height={18} />
+          </span>
+          <span className="mode-option__body">
+            <span className="mode-option__title">Live webcam tracking</span>
+            <span className="mode-option__text">
+              Track every object the camera sees, then stop to persist and analyse the run.
+            </span>
+          </span>
+          <span className="mode-option__state mono">{mode === "live" ? "selected" : "choose"}</span>
+        </button>
+      </section>
+
+      <div className="mode-note">
+        <span className="mini-label">What the engine tracks</span>
+        <p>
+          File runs detect saturated colour shapes through calibrated HSV ranges. A live capture
+          adds moving-foreground detection on top, so grey or dull objects are followed while
+          they move. Both paths share the same Kalman/Hungarian tracker, self-calibrating scene
+          baseline, rule + Isolation Forest + scene fusion and explanation text — the difference
+          is only what can be detected, never how an object is judged.
+        </p>
+        <p>
+          Every object is drawn with a stable ID, its measured path and a heading arrow. Levels
+          are cyan Normal, amber Suspicious and red Irregular, and every score is the persisted
+          engine value for that frame.
+        </p>
+      </div>
 
       <ol className="flow" aria-label="Studio workflow">
         {flow.map((step, index) => (
@@ -283,6 +436,7 @@ export function VideoStudioPage() {
         ))}
       </ol>
 
+      {mode === "upload" ? (
       <div className="layout-studio layout-studio--workflow">
         <Panel
           title="Ingest"
@@ -340,6 +494,44 @@ export function VideoStudioPage() {
           onInspect={openSession}
         />
       </div>
+      ) : (
+        <div className="studio-live">
+          <LiveCameraPanel onFinished={handleLiveFinished} onActiveChange={setLiveActive} />
+
+          <div className="studio-live__rail">
+            <Panel
+              title="Capture protocol"
+              sub="What the live engine does with each frame"
+              actions={<span className="tag mono">{LIVE_STEPS.length} stages</span>}
+            >
+              <ol className="protocol-steps">
+                {LIVE_STEPS.map((step, index) => (
+                  <li key={step.title} className="protocol-step">
+                    <span className="protocol-step__index mono" aria-hidden="true">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="protocol-step__body">
+                      <span className="protocol-step__title">{step.title}</span>
+                      <span className="protocol-step__text">{step.text}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </Panel>
+
+            <Panel title="Live readout glossary" sub="Every value on the stage means exactly this">
+              <dl className="glossary">
+                {LIVE_GLOSSARY.map((entry) => (
+                  <div className="glossary__row" key={entry.term}>
+                    <dt className="mono">{entry.term}</dt>
+                    <dd>{entry.text}</dd>
+                  </div>
+                ))}
+              </dl>
+            </Panel>
+          </div>
+        </div>
+      )}
 
       <section className="section" aria-labelledby="studio-samples">
         <SectionHeader
@@ -390,7 +582,10 @@ export function VideoStudioPage() {
                       type="button"
                       className="btn btn--quiet btn--sm"
                       disabled={busy}
-                      onClick={() => void startAnalysis({ kind: "sample", ref: source.name })}
+                      onClick={() => {
+                        setMode("upload");
+                        void startAnalysis({ kind: "sample", ref: source.name });
+                      }}
                     >
                       <span className="btn__icon">
                         <PlayIcon width={11} height={11} />

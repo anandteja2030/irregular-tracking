@@ -12,12 +12,22 @@ import { MetricCard, MetricGrid } from "../components/MetricCard";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import {
+  BarList,
+  LEVEL_COLOURS,
+  LevelDonut,
+  LevelLegend,
+  StackedLevelBar,
+} from "../components/charts";
+import {
   ArrowRightIcon,
   ClockIcon,
   DatabaseIcon,
   FilmIcon,
   RefreshIcon,
 } from "../components/icons";
+import { QuantumFlow } from "../components/quantum";
+import { DetectionCore } from "../components/DetectionCore";
+import { RunReport } from "../components/RunReport";
 import {
   formatBytes,
   formatDuration,
@@ -28,6 +38,7 @@ import {
   truncateMiddle,
 } from "../lib/format";
 import type { SessionItem } from "../lib/types";
+import { appearanceLabel } from "../lib/tracks";
 
 /** Readiness per surface, derived from the selected session rather than assumed. */
 function surfaceState(
@@ -59,9 +70,37 @@ export function OverviewPage() {
   const system = useResource(api.system);
   const sources = useResource(api.sources, { pollMs: 60_000 });
   const sessionState = useSession();
-  const { sessions, total: sessionTotal, status: sessionStatus, selected: session } = sessionState;
+  const {
+    sessions,
+    total: sessionTotal,
+    status: sessionStatus,
+    selected: session,
+    selectedId,
+  } = sessionState;
   const phase = apiPhase(health);
   const online = phase === "online";
+  const trackList = useResource(
+    (signal) => api.tracks(selectedId as string, { sort: "anomalies", limit: 50 }, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "none" },
+  );
+  const levels = session?.counts.levels ?? null;
+  const observations = session?.counts.observations ?? 0;
+  const elevated = levels ? levels.Suspicious + levels.Irregular : 0;
+  const elevatedShare = observations > 0 ? (elevated / observations) * 100 : null;
+  const rankedTracks = (trackList.data?.tracks ?? [])
+    .filter((track) => track.observed.anomalies > 0)
+    .slice(0, 6);
+  const sessionRows = sessions.slice(0, 8).map((item) => {
+    const total = item.counts.observations;
+    const raised = item.counts.levels.Suspicious + item.counts.levels.Irregular;
+    return {
+      key: item.session,
+      label: `${item.source.label ?? "run"} · ${item.session.slice(-6)}`,
+      value: total > 0 ? (raised / total) * 100 : 0,
+      hint: `${formatNumber(raised)} / ${formatNumber(total)} obs`,
+      color: raised > 0 ? "var(--chart-4)" : "var(--chart-1)",
+    };
+  });
 
   const refreshAll = () => {
     health.reload();
@@ -89,10 +128,19 @@ export function OverviewPage() {
       <>Establishing link</>
     );
 
+  const apiVersion = health.data?.version ?? system.data?.version ?? null;
   const heroLede =
     phase === "offline"
-      ? "The console could not reach the analysis service on this origin. Runtime readings stay empty until the link recovers — nothing below is estimated."
-      : "Runtime facts on this surface are measured live from the Python host: version, uptime, dependency inventory and the storage envelope behind the engine.";
+      ? "Analysis service unreachable."
+      : phase === "online" && session
+        ? `Answering${apiVersion ? ` on v${apiVersion}` : ""} · ${formatNumber(
+            session.counts.tracks,
+          )} tracked objects and ${formatNumber(elevated)} elevated rows across ${formatNumber(
+            observations,
+          )} observations.`
+        : phase === "online"
+          ? "Answering, but no analysis run is loaded — analyse a clip in Video Studio to populate the verdicts."
+          : "";
 
   const systemLoading = system.status === "loading" && !system.data;
   const systemError = system.status === "error" ? "runtime API unreachable" : null;
@@ -104,7 +152,7 @@ export function OverviewPage() {
       <PageHeader
         eyebrow="Surveillance intelligence"
         title="Command Overview"
-        lede="A single operational view of the analysis engine, its storage envelope and the surfaces that will carry session intelligence."
+        lede="The selected run: tracked objects, verdicts and irregular evidence."
         aside={
           <>
             <StatusPill tone="muted" size="sm" icon={<ClockIcon width={11} height={11} />}>
@@ -136,7 +184,6 @@ export function OverviewPage() {
             <h2 className="hero__title" id="overview-state">
               {heroTitle}
             </h2>
-            <p className="hero__lede">{heroLede}</p>
             <div className="hero__meta">
               <StatusPill tone="accent" size="sm">
                 NEURAL COMMAND API
@@ -153,6 +200,30 @@ export function OverviewPage() {
                 {online ? "Operational" : phase === "offline" ? "Offline" : "Linking"}
               </StatusPill>
             </div>
+            {heroLede ? <p className="hero__lede">{heroLede}</p> : null}
+            {session ? (
+              <dl className="hero__facts">
+                <div className="hero__fact">
+                  <dt>Source</dt>
+                  <dd className="mono" title={session.source.label ?? undefined}>
+                    {truncateMiddle(session.source.label ?? session.source.kind ?? "source", 30)}
+                  </dd>
+                </div>
+                <div className="hero__fact">
+                  <dt>Processing</dt>
+                  <dd className="mono">
+                    {formatResolution(session.processing.width, session.processing.height)} ·{" "}
+                    {formatFps(session.processing.fps)}
+                  </dd>
+                </div>
+                <div className="hero__fact">
+                  <dt>Frames</dt>
+                  <dd className="mono">
+                    {formatNumber(session.processing.frames_processed)} processed
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
             <div className="hero__foot">
               <Link className="btn btn--primary" to="/video-studio">
                 Open source inventory
@@ -166,30 +237,13 @@ export function OverviewPage() {
             </div>
           </div>
 
-          <div className="hero__orb">
-            <div
-              className={`orb ${
-                phase === "online" ? "" : phase === "offline" ? "is-down" : "is-idle"
-              }`}
-              aria-hidden="true"
-            >
-              <span className="orb__ring" />
-              <span className="orb__ring orb__ring--mid" />
-              <span className="orb__ring orb__ring--inner" />
-              <span className="orb__sweep" />
-              <span className="orb__core" />
-            </div>
-            <div className="orb-caption">
-              <span className="mini-label">Link state</span>
-              <span className="orb-caption__value">
-                {phase === "online"
-                  ? formatUptime(health.data?.uptime_s)
-                  : phase === "offline"
-                    ? "no route"
-                    : "pending"}
-              </span>
-            </div>
-          </div>
+          <DetectionCore
+            levels={levels}
+            tracks={session?.counts.tracks ?? 0}
+            observations={observations}
+            elevated={elevated}
+            online={online}
+          />
         </div>
       </section>
 
@@ -205,21 +259,18 @@ export function OverviewPage() {
           <MetricCard
             label="Uptime"
             value={online ? formatUptime(health.data?.uptime_s) : undefined}
-            hint="current process"
             tone={online ? "ok" : "neutral"}
             loading={phase === "linking"}
           />
           <MetricCard
             label="Python"
             value={system.data?.python}
-            hint={system.data?.python_implementation ?? "runtime"}
             loading={systemLoading}
             error={systemError}
           />
           <MetricCard
             label="Session store"
             value={system.data ? formatBytes(system.data.storage.db.bytes) : undefined}
-            hint={system.data?.storage.db.exists ? "SQLite present" : "not created yet"}
             loading={systemLoading}
             error={systemError}
           />
@@ -227,7 +278,6 @@ export function OverviewPage() {
             label="Sample sources"
             value={sources.data?.valid}
             unit={sources.data ? `of ${sources.data.count}` : undefined}
-            hint="decodable clips"
             loading={sourcesLoading}
             error={sourcesError}
           />
@@ -238,7 +288,6 @@ export function OverviewPage() {
                 ? undefined
                 : sessionTotal
             }
-            hint="persisted runs"
             tone={sessionTotal > 0 ? "accent-2" : "neutral"}
             loading={sessionStatus === "loading" && sessionTotal === 0}
             error={sessionStatus === "error" ? sessionState.error ? describeError(sessionState.error) : "unavailable" : null}
@@ -251,6 +300,161 @@ export function OverviewPage() {
             {describeError(health.error)}
           </p>
         ) : null}
+      </section>
+
+      <section className="section" aria-labelledby="overview-pipeline">
+        <SectionHeader
+          title="Quantum analysis pipeline"
+          id="overview-pipeline"
+          meta="Five measured stages · no simulated step"
+          level={3}
+        />
+        <Panel title="From photons to a labelled object" sub="The same engine path for files, samples and live frames">
+          <QuantumFlow />
+        </Panel>
+      </section>
+
+      <section className="section" aria-labelledby="overview-intelligence">
+        <SectionHeader
+          title="Session intelligence"
+          id="overview-intelligence"
+          meta={session ? `${session.session} · selected run` : "No persisted run selected"}
+          level={3}
+        />
+
+        {!session ? (
+          <Panel title="Nothing to visualise yet" sub="Session required">
+            <EmptyState
+              compact
+              title="No selected session"
+              body="Outcome charts, object leaders and run comparison all read a persisted session. Analyse a clip or stop a live capture, then pick it in the top bar."
+              code="GET /api/v1/sessions"
+              actions={
+                <Link className="btn btn--quiet" to="/video-studio">
+                  Open source inventory
+                </Link>
+              }
+            />
+          </Panel>
+        ) : (
+          <>
+            <RunReport
+              session={session}
+              tracks={trackList.data?.tracks ?? []}
+              tracksTotal={session.counts.tracks}
+            />
+
+            <div className="intel-grid">
+            <Panel title="Outcome mix" sub={`${formatNumber(observations)} persisted observations`}>
+              <div className="donut-row">
+                <LevelDonut levels={session.counts.levels} centerLabel="observations" />
+                <div className="donut-facts">
+                  <div className="donut-fact">
+                    <span className="donut-fact__label">Normal share</span>
+                    <span className="donut-fact__value mono">
+                      {observations > 0
+                        ? `${((session.counts.levels.Normal / observations) * 100).toFixed(1)}%`
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="donut-fact">
+                    <span className="donut-fact__label">Elevated share</span>
+                    <span className="donut-fact__value mono">
+                      {elevatedShare === null ? "—" : `${elevatedShare.toFixed(1)}%`}
+                    </span>
+                  </div>
+                  <div className="donut-fact">
+                    <span className="donut-fact__label">Objects tracked</span>
+                    <span className="donut-fact__value mono">
+                      {formatNumber(session.counts.tracks)}
+                    </span>
+                  </div>
+                  <div className="donut-fact">
+                    <span className="donut-fact__label">Objects with events</span>
+                    <span className="donut-fact__value mono">
+                      {formatNumber(
+                        (trackList.data?.tracks ?? []).filter(
+                          (track) => track.observed.anomalies > 0,
+                        ).length,
+                      )}
+                      <span className="dim"> of {formatNumber(session.counts.tracks)}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <StackedLevelBar levels={session.counts.levels} />
+              <div className="chart-legend-row">
+                <LevelLegend />
+                <span className="mono dim">{formatNumber(elevated)} elevated</span>
+              </div>
+            </Panel>
+
+            <Panel
+              title="Elevated object leaders"
+              sub="Objects ranked by persisted Suspicious + Irregular rows"
+              actions={
+                trackList.data ? (
+                  <span className="tag">{formatNumber(trackList.data.total)} objects</span>
+                ) : undefined
+              }
+            >
+              {trackList.status === "error" ? (
+                <ErrorState error={trackList.error} onRetry={trackList.reload} compact />
+              ) : trackList.status === "loading" && !trackList.data ? (
+                <LoadingRows rows={4} label="Loading object leaders" />
+              ) : rankedTracks.length === 0 ? (
+                <p className="chart-empty">No elevated observations in this run.</p>
+              ) : (
+                <BarList
+                  ariaLabel="Objects by elevated observations"
+                  rows={rankedTracks.map((track) => ({
+                    key: String(track.track_id),
+                    label: `T${String(track.track_id).padStart(2, "0")} · ${appearanceLabel(track.appearance)}`,
+                    value: track.observed.anomalies,
+                    color: LEVEL_COLOURS[track.observed.worst_level],
+                    hint: `${formatNumber(track.observed.observations)} obs`,
+                  }))}
+                  formatValue={(value) => `${formatNumber(value)} ev`}
+                />
+              )}
+              <Link className="btn btn--quiet btn--sm" to={`/tracks?session=${encodeURIComponent(session.session)}`}>
+                Open this run in Track Explorer
+                <span className="btn__icon">
+                  <ArrowRightIcon width={12} height={12} />
+                </span>
+              </Link>
+            </Panel>
+
+            <Panel
+              className="intel-grid__full"
+              title="Run comparison"
+              sub="Elevated share per persisted session"
+            >
+              {sessionRows.length > 1 ? (
+                <>
+                  <BarList
+                    ariaLabel="Elevated observation share by session"
+                    rows={sessionRows}
+                    max={100}
+                    formatValue={(value) => `${value.toFixed(0)}%`}
+                  />
+                </>
+              ) : (
+                <EmptyState
+                  compact
+                  title="Comparison needs a second run"
+                  body={
+                    sessionRows.length === 1
+                      ? "Only one run exists. Analyse another clip to compare."
+                      : "No persisted session to compare."
+                  }
+                  code="POST /api/v1/analyze · one row per persisted session"
+                />
+              )}
+            </Panel>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="section" aria-labelledby="overview-surface">
@@ -275,7 +479,6 @@ export function OverviewPage() {
                     <span className="surface-index mono">{item.index}</span>
                     <span className="surface-text">
                       <span className="surface-title">{item.label}</span>
-                      <span className="surface-blurb">{item.blurb}</span>
                     </span>
                     <StatusPill tone={state.tone} size="sm" className="row--link__state">
                       {state.label}

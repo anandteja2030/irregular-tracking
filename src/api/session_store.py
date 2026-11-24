@@ -60,6 +60,15 @@ def _encode(bgr) -> bytes | None:
     return buf.tobytes() if ok else None
 
 
+def _payload_bytes(value: Any) -> int:
+    """Approximate retained size of JSON-safe non-preview artifacts."""
+    try:
+        return len(json.dumps(value, separators=(",", ":"),
+                              default=str).encode("utf-8"))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 @dataclass
 class PreviewImage:
     frame: int
@@ -140,6 +149,9 @@ class SessionArtifactStore:
                     "zone_dwell_s": _finite(rec.get("zone_dwell_s")),
                     "color": rec.get("color"),
                     "shape": rec.get("shape"),
+                    "class_name": (rec.get("class_name")
+                                   if isinstance(rec.get("class_name"), str)
+                                   else None),
                 }
                 trajectories.setdefault(track_id, []).append({
                     "frame": frame,
@@ -161,6 +173,13 @@ class SessionArtifactStore:
                 scene = {k: v for k, v in scene.items()
                          if isinstance(v, (int, float, bool, str, dict, list))
                          or v is None}
+
+        # The byte budget covers everything retained for the session, not
+        # only the JPEG previews: trajectories and structured evidence can
+        # otherwise grow without ever triggering eviction.
+        n_bytes += _payload_bytes(trajectories)
+        n_bytes += _payload_bytes(evidence)
+        n_bytes += _payload_bytes(scene)
 
         artifacts = SessionArtifacts(
             session=str(session), created_mono=time.monotonic(),

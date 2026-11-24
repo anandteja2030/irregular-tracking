@@ -7,10 +7,11 @@ plain-English description that later feeds the explanation generator.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from config.config import RuleConfig, load_config
-from src.analysis.calibration import SceneStats
+from src.analysis.calibration import SceneStats, _angle_gap
 from src.analysis.features import MovementSnapshot, TrajectoryStats, _octant
 
 
@@ -51,35 +52,46 @@ class RuleEngine:
             return []
         if stats.n_samples < 20:          # not calibrated: too little evidence
             return []
-        # z-score of speed against learned distribution
-        z = (v - stats.speed_mean) / max(stats.speed_std, 1.0)
-        sev = min(1.0, max(0.0, z / self.cfg.max_z))
-        if sev < 0.25:
+        if stats.speed_p90 <= 0:
             return []
+        # Compare against the scene's fast envelope. A z-score would punish
+        # objects that are simply closer to the camera (perspective makes a
+        # near car read 5x faster than a far one in a perfectly normal scene).
+        ratio = v / stats.speed_p90
+        if ratio < 1.6:
+            return []
+        sev = min(1.0, 0.5 + 0.5 * (ratio - 1.6) / 1.4)
         return [RuleSignal(
             rule="excessive_speed",
             severity=round(sev, 3),
-            description=(f"speed {v:.0f} px/s is {z:.1f} standard deviations "
-                         f"above the calibrated mean ({stats.speed_mean:.0f} px/s)"),
+            description=(f"speed {v:.0f} px/s is {ratio:.1f}x the scene's "
+                         f"fast envelope (p90 {stats.speed_p90:.0f} px/s)"),
         )]
 
     def rule_against_flow(self, snap: MovementSnapshot,
                           stats: SceneStats | None) -> list[RuleSignal]:
-        if stats is None or not stats.dominant_directions or snap.direction_deg is None:
+        if stats is None or snap.direction_deg is None:
             return []
-        if not stats.ready:
+        if not stats.ready or not stats.dominant_angles:
+            return []
+        if stats.flow_share < 0.30:
+            return []     # multiple flows / diffuse scene: heading means little
+        deviation = min(_angle_gap(snap.direction_deg, angle)
+                        for angle in stats.dominant_angles)
+        tolerance = self.cfg.flow_tolerance_deg
+        if deviation <= tolerance:
             return []
         oct_ = _octant(snap.direction_deg)
-        if oct_ in stats.dominant_directions:
-            return []
         share = stats.direction_hist.get(oct_, 0.0)
-        if share >= 0.35:
-            return []     # too diffuse a scene for flow direction to mean much
+        if share >= 0.25:
+            return []     # this heading is common in its own right
+        severity = 0.35 + 0.65 * min(1.0, (deviation - tolerance) /
+                                     max(180.0 - tolerance, 1.0))
         return [RuleSignal(
             rule="direction_against_flow",
-            severity=0.6 if share < 0.05 else 0.35,
-            description=(f"moves {oct_}, which this scene rarely shows "
-                         f"(dominant flow: {stats.dominant_directions})"),
+            severity=round(severity, 3),
+            description=(f"heading is {deviation:.0f} deg off the scene's "
+                         f"dominant flow ({', '.join(stats.dominant_directions)})"),
         )]
 
     def rule_erratic_heading(self, snap: MovementSnapshot) -> list[RuleSignal]:
@@ -99,9 +111,12 @@ class RuleEngine:
     def rule_sudden_accel(self, snap: MovementSnapshot,
                           stats: SceneStats | None) -> list[RuleSignal]:
         a = snap.acceleration_px_s2
-        if abs(a) < 600.0:            # gentle thresholds tuned for px/s^2 scale
+        # Detector boxes wobble by a few pixels, which at 30 fps reads as a
+        # large instantaneous acceleration. 1200 px/s^2 is well above that
+        # jitter while a real brake/swerve still crosses it.
+        if abs(a) < 1200.0:
             return []
-        sev = min(1.0, abs(a) / 2000.0 + 0.25)
+        sev = min(1.0, abs(a) / 4000.0 + 0.25)
         verb = "accelerating" if a > 0 else "decelerating"
         return [RuleSignal(
             rule="sudden_acceleration",
@@ -131,9 +146,15 @@ class RuleEngine:
     def rule_loitering(self, snap: MovementSnapshot, traj: TrajectoryStats) -> list[RuleSignal]:
         if traj.dwell_seconds < self.cfg.loiter_seconds:
             return []
-        if traj.straightness > 0.9 and traj.net_displacement_px > 60:
-            return []                 # moved a long way in a straight line: not loiter
-        if traj.mean_speed_px_s >= 400.0:
+        # Perspective-safe definition: an object that has stayed within a
+        # couple of its own body lengths for the whole dwell is stationary in
+        # the scene, however many pixels a distant object seems to move.
+        size = math.hypot(*snap.bbox_wh) or 1.0
+        if traj.net_displacement_px > self.cfg.loiter_stationary_factor * size:
+            return []
+        if traj.mean_speed_px_s >= 25.0:
+            # In a moving-camera scene a followed car stays put on screen at
+            # 100+ px/s; only a genuinely stopped object stays under this.
             return []
         sev = min(1.0, traj.dwell_seconds / (self.cfg.loiter_seconds * 6) * 0.8 + 0.2)
         return [RuleSignal(

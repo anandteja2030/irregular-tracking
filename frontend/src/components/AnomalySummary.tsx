@@ -7,20 +7,16 @@ import type {
   TrackList,
   Level,
 } from "../lib/types";
-import {
-  channelCounts,
-  repeatedTracks,
-  ruleFrequencies,
-  trackFrequencies,
-} from "../lib/anomalies";
+import { channelCounts, repeatedTracks, ruleFrequencies } from "../lib/anomalies";
 import { formatNumber } from "../lib/format";
-import { formatTrackId } from "../lib/tracks";
+import { classLabel, formatTrackId } from "../lib/tracks";
 import { ArrowRightIcon, TrackIcon } from "./icons";
 import { LevelBadge, LevelMeter } from "./SessionBits";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { Panel } from "./Panel";
 import { MetricCard, MetricGrid } from "./MetricCard";
 import { SectionHeader } from "./SectionHeader";
+import { ColumnChart, DonutChart, LEVEL_COLOURS, StackedLevelBar } from "./charts";
 
 const LEVELS: Level[] = ["Normal", "Suspicious", "Irregular"];
 
@@ -34,8 +30,6 @@ interface AnomalySummaryProps {
   eventsStatus: ResourceStatus;
   eventsError: unknown;
   reloadEvents: () => void;
-  eventsTotal: number;
-  truncated: boolean;
 }
 
 export function AnomalySummary({
@@ -48,17 +42,29 @@ export function AnomalySummary({
   eventsStatus,
   eventsError,
   reloadEvents,
-  eventsTotal,
-  truncated,
 }: AnomalySummaryProps) {
   const data = summary.data;
   const levels = data?.counts.levels;
   const observations = data?.counts.observations ?? 0;
   const repeated = repeatedTracks(tracks.data?.tracks ?? []);
-  const frequencies = trackFrequencies(events);
   const channels = channelCounts(events);
   const rules = ruleFrequencies(events);
-  const evidenceRetained = events.some((event) => event.evidence.available);
+  const scoreBins = Array.from({ length: 10 }, (_, index) => ({
+    label: (index / 10).toFixed(1),
+    value: 0,
+  }));
+  let scored = 0;
+  for (const event of events) {
+    const score = event.scores.fused;
+    if (score === null || !Number.isFinite(score)) continue;
+    const bin = Math.min(9, Math.max(0, Math.floor(score * 10)));
+    scoreBins[bin].value += 1;
+    scored += 1;
+  }
+  const eventLevels = {
+    Suspicious: events.filter((event) => event.level === "Suspicious").length,
+    Irregular: events.filter((event) => event.level === "Irregular").length,
+  };
 
   return (
     <section className="section" aria-labelledby="anomaly-summary-title">
@@ -88,41 +94,38 @@ export function AnomalySummary({
             <MetricCard
               label="Observations"
               value={formatNumber(data.counts.observations)}
-              hint="persisted rows"
             />
             <MetricCard
               label="Tracked objects"
               value={formatNumber(data.counts.tracks)}
-              hint="distinct tracks"
             />
             <MetricCard
               label="Elevated events"
               value={formatNumber(data.counts.anomalies)}
-              hint="Suspicious + Irregular"
               tone="warn"
             />
             <MetricCard
               label="Distinct affected tracks"
               value={formatNumber(data.anomalies.tracks_affected)}
-              hint="carry an event"
             />
             <MetricCard
               label="Mean fused score"
               value={formatNumber(data.anomalies.score_mean, 2)}
-              hint="persisted scores"
               meter={data.anomalies.score_mean}
             />
             <MetricCard
               label="Highest fused score"
               value={formatNumber(data.anomalies.score_max, 2)}
-              hint="single event max"
               tone="bad"
               meter={data.anomalies.score_max}
             />
           </MetricGrid>
 
           <div className="anomaly-summary-grid">
-            <Panel title="Severity distribution" sub="Every persisted observation">
+            <Panel
+              title="Severity distribution"
+              sub="Every persisted observation, by fused band"
+            >
               <div className="severity-distribution">
                 {LEVELS.map((level) => {
                   const count = levels?.[level] ?? 0;
@@ -147,15 +150,11 @@ export function AnomalySummary({
               <div className="severity-meter">
                 <LevelMeter levels={data.counts.levels} />
               </div>
-              <p className="hint hint--flush">
-                Normal observations are counted here but are not anomaly events; the ledger
-                endpoint returns only Suspicious and Irregular observations.
-              </p>
             </Panel>
 
             <Panel
               title="Repeated anomaly tracks"
-              sub="Track-level frequency"
+              sub="Objects that crossed a band more than once"
               actions={
                 tracks.data ? (
                   <span className="tag">{formatNumber(tracks.data.total)} objects</span>
@@ -180,46 +179,85 @@ export function AnomalySummary({
                 />
               ) : (
                 <div className="repeat-tracks">
-                  {repeated.slice(0, 6).map((track) => (
-                    <Link
-                      className="repeat-track"
-                      key={track.track_id}
-                      to={`/tracks?session=${encodeURIComponent(sessionId)}&track=${track.track_id}`}
-                    >
-                      <span className="repeat-track__id mono">
-                        {formatTrackId(track.track_id)}
-                      </span>
-                      <span className="repeat-track__meta">
-                        <span>{formatNumber(track.observed.anomalies)} events</span>
-                        <span className="repeat-track__levels">
-                          <span>S {formatNumber(track.observed.levels.Suspicious)}</span>
-                          <span>I {formatNumber(track.observed.levels.Irregular)}</span>
+                  {repeated.slice(0, 6).map((track) => {
+                    const observations = track.observed.observations;
+                    const elevated = track.observed.anomalies;
+                    const share =
+                      observations > 0 ? ((elevated / observations) * 100).toFixed(1) : null;
+                    const label = classLabel(track.appearance);
+                    return (
+                      <Link
+                        className="repeat-track"
+                        key={track.track_id}
+                        to={`/tracks?session=${encodeURIComponent(sessionId)}&track=${track.track_id}`}
+                      >
+                        <span className="repeat-track__id mono">
+                          {formatTrackId(track.track_id)}
                         </span>
-                      </span>
-                      <ArrowRightIcon width={11} height={11} />
-                    </Link>
-                  ))}
+                        {label && <span className="repeat-track__class">{label}</span>}
+                        <span className="repeat-track__meta">
+                          <span>
+                            <strong>{formatNumber(elevated)}</strong> elevated of{" "}
+                            {formatNumber(observations)} observations
+                            {share === null ? "" : ` · ${share}%`}
+                          </span>
+                          <span className="repeat-track__levels">
+                            <span>S {formatNumber(track.observed.levels.Suspicious)}</span>
+                            <span>I {formatNumber(track.observed.levels.Irregular)}</span>
+                            <span>worst {track.observed.worst_level}</span>
+                          </span>
+                          <span className="repeat-track__bar">
+                            <StackedLevelBar levels={track.observed.levels} height={6} />
+                          </span>
+                        </span>
+                        <ArrowRightIcon width={11} height={11} />
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
-              <p className="hint hint--flush">
-                {data.anomalies.count > 0
-                  ? `${formatNumber(data.anomalies.count)} events are not ${formatNumber(
-                      data.anomalies.tracks_affected,
-                    )} objects: one track can emit many events. Repeated activity describes coexistence in the same track, not a cause.`
-                  : "No elevated event means there is no repeated track activity to describe. The count stays zero rather than inventing a track."}
-              </p>
-              {frequencies.length > 0 && eventsReady && (
-                <p className="hint hint--flush mono">
-                  Loaded ledger shares:{" "}
-                  {frequencies
-                    .slice(0, 4)
-                    .map(
-                      (track) =>
-                        `${formatTrackId(track.trackId)} ${formatNumber(track.events)}`,
-                    )
-                    .join(" · ")}
-                  {truncated ? ` of ${formatNumber(eventsTotal)} events loaded` : ""}
+
+            </Panel>
+
+            <Panel title="Score shape" sub={`${formatNumber(scored)} scored elevated events`}>
+              {eventsStatus === "error" ? (
+                <ErrorState error={eventsError} onRetry={reloadEvents} compact />
+              ) : !eventsReady ? (
+                <LoadingRows rows={3} label="Loading fused scores" />
+              ) : scored === 0 ? (
+                <p className="chart-empty">
+                  No loaded event carries a persisted fused score, so no distribution is drawn.
                 </p>
+              ) : (
+                <>
+                  <div className="score-chart-row">
+                    <ColumnChart
+                      bins={scoreBins}
+                      color="var(--chart-4)"
+                      ariaLabel="Elevated events per fused-score decile"
+                      valueFormat={(value) => `${formatNumber(value)} ev`}
+                    />
+                    <DonutChart
+                      size={132}
+                      centerValue={formatNumber(events.length)}
+                      centerLabel="events"
+                      ariaLabel={`Suspicious ${eventLevels.Suspicious}, Irregular ${eventLevels.Irregular}`}
+                      segments={[
+                        {
+                          label: "Suspicious",
+                          value: eventLevels.Suspicious,
+                          color: LEVEL_COLOURS.Suspicious,
+                        },
+                        {
+                          label: "Irregular",
+                          value: eventLevels.Irregular,
+                          color: LEVEL_COLOURS.Irregular,
+                        },
+                      ]}
+                    />
+                  </div>
+
+                </>
               )}
             </Panel>
 
@@ -269,19 +307,7 @@ export function AnomalySummary({
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="hint hint--flush">
-                      {evidenceRetained
-                        ? "Structured evidence was retained, but no rule trigger appears in the loaded events."
-                        : "Structured rule evidence is not retained for this session; rule names cannot be recovered from persisted rows."}
-                    </p>
-                  )}
-                  {truncated && (
-                    <p className="hint hint--flush">
-                      These counts cover the {formatNumber(events.length)} events loaded by this
-                      view, not all {formatNumber(eventsTotal)} reported events.
-                    </p>
-                  )}
+                  ) : null}
                 </>
               )}
             </Panel>
@@ -390,11 +416,6 @@ function FusionBands({ config }: { config: EngineConfig }) {
           </div>
         ))}
       </div>
-      <p className="hint hint--flush">
-        Scores below {anomaly.threshold_suspicious.toFixed(2)} are Normal; at or above{" "}
-        {anomaly.threshold_irregular.toFixed(2)} they are Irregular. Values are read live from
-        the engine and are not recomputed in the browser.
-      </p>
     </div>
   );
 }

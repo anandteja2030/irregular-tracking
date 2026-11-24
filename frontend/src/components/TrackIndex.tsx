@@ -3,6 +3,7 @@ import type { TrackItem, TrackList } from "../lib/types";
 import {
   LEVEL_FILTERS,
   TRACK_SORTS,
+  appearanceLabel,
   filterTracks,
   formatTrackId,
   type TrackLevelFilter,
@@ -49,10 +50,7 @@ function TrackRow({
       <span className="track-row__id mono">{formatTrackId(track.track_id)}</span>
       <span className="track-row__body">
         <span className="track-row__line">
-          <span className="track-row__color">
-            {track.appearance.color ?? "unknown colour"}
-            {track.appearance.shape ? ` · ${track.appearance.shape}` : ""}
-          </span>
+          <span className="track-row__color">{appearanceLabel(track.appearance)}</span>
           <span className="track-row__count mono">
             {track.observed.anomalies} ev · {track.observed.observations} obs
           </span>
@@ -95,7 +93,7 @@ export function TrackIndex({
             type="search"
             value={query}
             onChange={(event) => onQuery(event.target.value)}
-            placeholder="ID, colour, heading"
+            placeholder="ID, class, heading"
             aria-label="Search tracks"
           />
           {query && (

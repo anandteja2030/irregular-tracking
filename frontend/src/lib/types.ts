@@ -260,7 +260,13 @@ export interface LevelShare {
 
 export interface TrackItem {
   track_id: number;
-  appearance: { color: string | null; shape: string | null };
+  /** `class_name` is what the detector recognised (car, truck, person, ...);
+   * `color`/`shape` are the colour engine's fallback for synthetic samples. */
+  appearance: {
+    color: string | null;
+    shape: string | null;
+    class_name?: string | null;
+  };
   frames: {
     first: number | null;
     last: number | null;
@@ -384,7 +390,11 @@ export interface AnomalyItem extends ObservationItem {
     scene_note: string | null;
     zone: string | null;
     zone_dwell_s: number | null;
-    appearance: { color: string | null; shape: string | null } | null;
+    appearance: {
+      color: string | null;
+      shape: string | null;
+      class_name?: string | null;
+    } | null;
   };
 }
 
@@ -402,6 +412,7 @@ export interface AnomalyTrackContext {
   track_id: number;
   color: string | null;
   shape: string | null;
+  class_name?: string | null;
   observations: number;
   anomalies: number;
   worst_level: Level;
@@ -489,6 +500,90 @@ export interface UploadRecord {
   content_type: string | null;
   created_ts: string;
   video: VideoProbe;
+}
+
+/* ------------------------------------------------------------- live camera */
+
+export interface LiveTrack {
+  track_id: number;
+  /** Pixel box in the posted frame: `[x, y, width, height]`. */
+  box: [number, number, number, number];
+  centroid: [number, number];
+  /** Recent measured centroids for this track, oldest first. */
+  trail: [number, number][];
+  color: string | null;
+  shape: string | null;
+  class_name?: string | null;
+  level: Level;
+  scores: { fused: number; rule: number; ml: number; scene: number };
+  speed_px_s: number | null;
+  direction_deg: number | null;
+  zone: string | null;
+  why: string;
+  rules: string[];
+  /** Engine confirmation: consecutive matched frames reached tracking.min_hits. */
+  confirmed?: boolean;
+  /** Consecutive unmatched frames for this identity in the latest frame. */
+  misses?: number;
+  /** Frames this identity has actually been observed in. */
+  frames_seen?: number;
+}
+
+export interface LiveCounts {
+  objects_now: number;
+  confirmed_now?: number;
+  candidates_now?: number;
+  tracks_seen: number;
+  observations: number;
+  frames: number;
+  levels: Record<Level, number>;
+}
+
+export interface LiveFrame {
+  live_id: string;
+  session_id: string;
+  frame_idx: number;
+  ts_s: number;
+  fps: number;
+  width: number;
+  height: number;
+  calibrated: boolean;
+  detections: number;
+  tracks: LiveTrack[];
+  counts: LiveCounts;
+  elapsed_s: number;
+}
+
+export interface LiveSession {
+  live_id: string;
+  session_id: string;
+  state: string;
+  created_ts: string;
+  frames: number;
+  fps: number;
+  width: number;
+  height: number;
+  observations: number;
+  tracks_seen: number;
+  levels: Record<Level, number>;
+  elapsed_s: number;
+  limits: { max_frames: number; max_frame_bytes: number };
+}
+
+export interface LiveStopResult {
+  session_id: string;
+  live_id: string;
+  state: string;
+  frames_processed: number;
+  observations: number;
+  tracks: number;
+  levels: Record<Level, number>;
+  fps: number;
+  duration_s: number;
+  wall_s: number;
+  previews: number;
+  started_ts: string;
+  ended_ts: string;
 }
 
 export type JobState =
@@ -589,6 +684,54 @@ export interface EvaluationMetrics {
   n_labeled: number;
   /** Reserved for an API that exposes ranked scores. Current API omits it. */
   roc_auc?: number | null;
+}
+
+/** Measured counts returned by the explicit data purge. */
+export interface PurgedCounts {
+  sessions: number;
+  events: number;
+  tracks: number;
+  points: number;
+  calibration: number;
+  labels: number;
+  runs: number;
+  artifacts: number;
+  uploads: number;
+  live_cancelled: number;
+}
+
+export interface PurgeResponse {
+  purged: PurgedCounts;
+}
+
+export interface ObjectEvidenceItem {
+  track_id: number;
+  event_id: number;
+  requested_frame: number;
+  retained_frame: number;
+  frame_offset: number;
+  level: Level;
+  fused_score: number | null;
+  speed_px_s: number | null;
+  direction_deg: number | null;
+  summary: string;
+  window_px: number;
+  centroid: { x: number; y: number };
+  crop_url: string;
+}
+
+export interface ObjectEvidenceResponse {
+  session: string;
+  available: boolean;
+  count: number;
+  irregular_objects: number;
+  ranked_objects: number;
+  preview_frames: number;
+  preview_stride: number | null;
+  window_rule: string;
+  items: ObjectEvidenceItem[];
+  source: string;
+  note: string;
 }
 
 export interface EvaluationResponse {

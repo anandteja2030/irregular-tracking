@@ -4,7 +4,7 @@ Everything here is a *query*: detection, tracking, calibration and scoring all
 stay in their original modules. The repository only reads the tables the
 engine already writes (`track_events`, `track_summaries`, `run_stats`,
 `ground_truth`) through the database path in the live config singleton, so a
-session produced by the CLI, Streamlit or the API is readable the same way.
+session produced by the CLI or the API is readable the same way.
 
 Efficiency notes
 ----------------
@@ -17,11 +17,10 @@ Efficiency notes
 """
 from __future__ import annotations
 
-import json
 import math
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -29,9 +28,10 @@ import numpy as np
 
 from config.config import load_config
 from src.analysis.features import _octant
-from src.analysis.logger import (
-    CALIBRATION_SNAPSHOT_VERSION,
-    SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS,
+from src.analysis.verdicts import track_verdict
+from src.analysis.snapshot_validation import (
+    decode_calibration_snapshot,
+    snapshot_version,
 )
 
 LEVELS = ("Normal", "Suspicious", "Irregular")
@@ -56,6 +56,7 @@ WITH agg AS (
     GROUP BY track_id
 )
 SELECT agg.*, ts.color AS s_color, ts.shape AS s_shape,
+       ts.class_name AS s_class_name,
        ts.n_points AS s_n_points, ts.n_seconds AS s_n_seconds,
        ts.mean_speed_px_s AS s_mean_speed, ts.max_speed_px_s AS s_max_speed,
        ts.path_length_px AS s_path_length,
@@ -111,11 +112,16 @@ _EVENT_COLUMNS = ("id, ts_utc, session, frame_idx, track_id, level, fused_score,
                   " rule_score, ml_score, scene_score, speed_px_s,"
                   " direction_deg, why")
 
+# Mirrors src.analysis.verdicts: an object changes band only on repeated
+# evidence (>= 2 rows and >= 8% of its observations), so a single noisy frame
+# cannot turn a regular car into an irregular one.
+_IRREGULAR_SQL = "(t.irregular >= 2 AND t.irregular * 100 >= t.observations * 8)"
+_ELEVATED_SQL = "(t.anomalies >= 2 AND t.anomalies * 100 >= t.observations * 8)"
 _LEVEL_FILTERS = {
-    "Normal": "t.anomalies = 0",
-    "Suspicious": "t.anomalies > 0",
-    "Irregular": "t.irregular > 0",
-    "any": "t.anomalies > 0",
+    "Normal": f"NOT {_ELEVATED_SQL}",
+    "Suspicious": f"NOT {_IRREGULAR_SQL} AND {_ELEVATED_SQL}",
+    "Irregular": _IRREGULAR_SQL,
+    "any": _ELEVATED_SQL,
 }
 
 _TRACK_SORTS = {
@@ -212,10 +218,19 @@ def round_or_none(value, digits: int = 3):
 
 
 def parse_timestamp(value: str | None) -> str | None:
-    """Validate an ISO-8601 filter and normalise it for string comparison."""
+    """Validate an ISO-8601 filter and normalise it to UTC.
+
+    Session timestamps are persisted as UTC strings and compared with SQLite's
+    lexical ordering. An offset such as ``+05:00`` must therefore be converted
+    to UTC first; comparing the original offset text would order the same
+    instant differently depending on the offset's numeric spelling.
+    """
     if value is None:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).isoformat()
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _octant_counts(angles: list[float]) -> dict[str, int]:
@@ -392,10 +407,8 @@ def _track_rows(session: str, *, level: str | None = None,
     return total, [dict(r) for r in rows]
 
 
-def _worst_level(irregular: int, anomalies: int) -> str:
-    if irregular > 0:
-        return "Irregular"
-    return "Suspicious" if anomalies > 0 else "Normal"
+def _worst_level(irregular: int, anomalies: int, observations: int) -> str:
+    return track_verdict(observations, anomalies, irregular)
 
 
 def track_from_row(row: dict, fps: float | None) -> dict:
@@ -419,6 +432,7 @@ def track_from_row(row: dict, fps: float | None) -> dict:
         "appearance": {
             "color": row.get("s_color"),
             "shape": row.get("s_shape"),
+            "class_name": row.get("s_class_name"),
         },
         "frames": {
             "first": first,
@@ -431,7 +445,7 @@ def track_from_row(row: dict, fps: float | None) -> dict:
             "anomalies": anomalies,
             "levels": _level_counts(row.get("suspicious"), irregular,
                                     observations),
-            "worst_level": _worst_level(irregular, anomalies),
+            "worst_level": _worst_level(irregular, anomalies, observations),
             "duration_s": observed_s,
         },
         "motion": {
@@ -723,33 +737,11 @@ def read_calibration_snapshot(session: str) -> tuple[dict | None, str | None]:
             (session,)).fetchone()
     if row is None:
         return None, None
-    raw_version = row["schema_version"]
-    if raw_version is None:
-        return None, ("The stored calibration snapshot has no schema version, "
-                      "so it cannot be interpreted safely.")
-    try:
-        version = int(raw_version)
-    except (TypeError, ValueError):
-        return None, ("The stored calibration snapshot has an unreadable "
-                      "schema version, so it cannot be interpreted safely.")
-    if version not in SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS:
-        return None, (
-            f"Calibration snapshot schema version {version} is not supported "
-            f"by this build (supported version: "
-            f"{CALIBRATION_SNAPSHOT_VERSION}); it was not interpreted.")
-    try:
-        payload = json.loads(row["payload"])
-    except (TypeError, ValueError):
-        return None, ("The stored calibration snapshot is unreadable "
-                      "(malformed JSON payload); it was not interpreted.")
-    if not isinstance(payload, dict) or not isinstance(
-            payload.get("calibration"), dict):
-        return None, ("The stored calibration snapshot has no readable "
-                      "calibration object; it was not interpreted.")
-    return ({"schema_version": version,
-             "captured_ts": row["captured_ts"],
-             "calibration": payload["calibration"],
-             "parameters": payload.get("parameters") or {}}, None)
+    version, problem = snapshot_version(row["schema_version"])
+    if problem is not None:
+        return None, problem
+    return decode_calibration_snapshot(
+        row["payload"], version, row["captured_ts"])
 
 
 def calibration_snapshot(session: str) -> dict | None:

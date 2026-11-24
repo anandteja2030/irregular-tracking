@@ -8,8 +8,12 @@ import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { MetricCard, MetricGrid } from "../components/MetricCard";
 import { SectionHeader } from "../components/SectionHeader";
+import { ReportGuide } from "../components/ReportGuide";
+import { ResultsDashboard } from "../components/ResultsDashboard";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
+import { BarList } from "../components/charts";
+import { QuantumHero } from "../components/quantum";
 import {
   AlertIcon,
   ArrowRightIcon,
@@ -260,6 +264,56 @@ export function EvaluationPage() {
                 ? { tone: "warn", label: "Insufficient classes" }
                 : { tone: "warn", label: "Metrics unavailable" };
 
+  const normalLabels = data?.label_counts?.Normal ?? 0;
+  const anomalyLabels = data?.label_counts?.Anomaly ?? 0;
+  const labelsStored = labelTotal(data) ?? 0;
+  const scoreSteps: { key: string; label: string; detail: string; met: boolean }[] = [
+    {
+      key: "run",
+      label: "A persisted run is selected",
+      met: Boolean(selectedId),
+      detail: selected ? selected.session : "Choose a run in the session picker.",
+    },
+    {
+      key: "labels",
+      label: "Curated labels are stored",
+      met: labelsStored > 0,
+      detail: `${formatNumber(labelsStored)} stored · ${formatNumber(
+        data?.labeled_observations,
+      )} matched to observations`,
+    },
+    {
+      key: "classes",
+      label: "Both classes are present",
+      met: normalLabels > 0 && anomalyLabels > 0,
+      detail: `${formatNumber(normalLabels)} normal / ${formatNumber(anomalyLabels)} anomaly`,
+    },
+    {
+      key: "scores",
+      label: "Scores are computed",
+      met: state === "ready",
+      detail:
+        state === "ready"
+          ? "Precision, recall, F1 and the confusion matrix are measured below."
+          : "The API scores the run once the three checks above hold.",
+    },
+  ];
+
+  const scorePath = (
+    <ol className="score-path" aria-label="What a scored evaluation needs">
+      {scoreSteps.map((step, index) => (
+        <li key={step.key} className={`score-path__step ${step.met ? "is-met" : ""}`.trim()}>
+          <span className="score-path__index mono">{String(index + 1).padStart(2, "0")}</span>
+          <span className="score-path__text">
+            <span className="score-path__label">{step.label}</span>
+            <span className="score-path__detail mono">{step.detail}</span>
+          </span>
+          <span className="score-path__state mono">{step.met ? "met" : "pending"}</span>
+        </li>
+      ))}
+    </ol>
+  );
+
   let evaluationBody: React.ReactNode;
   if (!selectedId) {
     evaluationBody = (
@@ -319,6 +373,22 @@ export function EvaluationPage() {
             />
           ))}
         </MetricGrid>
+
+        <Panel title="Agreement at a glance" sub="Rate comparison on one 0–100% scale">
+          <BarList
+            ariaLabel="Agreement metrics as percentages"
+            max={1}
+            rows={rateCards.map((card) => ({
+              key: card.label,
+              label: card.label,
+              value: Math.max(0, Math.min(1, card.value)),
+              color:
+                card.label === "False positive rate" ? "var(--chart-5)" : "var(--chart-1)",
+              hint: card.hint,
+            }))}
+            formatValue={(value) => `${(value * 100).toFixed(1)}%`}
+          />
+        </Panel>
 
         <div className="eval-matrix">
           <div className="eval-matrix__main">
@@ -438,38 +508,42 @@ export function EvaluationPage() {
           total={data?.total_observations}
           coverage={data?.coverage}
         />
-        <EmptyState
-          compact
-          title="Not enough label diversity"
-          body={
-            data?.reason ??
-            "Metrics require at least one Normal and one Anomaly label matched to observations. Only one class is present, so no score is computed."
-          }
-          glyph={<LayersIcon width={17} height={17} />}
-        />
-        <div className="eval-panel">
-          <ClassBalance normal={data?.label_counts?.Normal} anomaly={data?.label_counts?.Anomaly} />
-          <div className="eval-facts">
-            <span>
-              Stored labels: {formatNumber(labelTotal(data))}
-              <span className="dim">
-                {" "}
-                ({formatNumber(data?.label_counts?.Normal ?? 0)} normal /{" "}
-                {formatNumber(data?.label_counts?.Anomaly ?? 0)} anomaly)
+        <div className="eval-state">
+          <EmptyState
+            compact
+            title="Not enough label diversity"
+            body={
+              data?.reason ??
+              "Metrics require at least one Normal and one Anomaly label matched to observations. Only one class is present, so no score is computed."
+            }
+            glyph={<LayersIcon width={17} height={17} />}
+          />
+          <div className="eval-panel">
+            <ClassBalance
+              normal={data?.label_counts?.Normal}
+              anomaly={data?.label_counts?.Anomaly}
+            />
+            <div className="eval-facts">
+              <span>
+                Stored labels: {formatNumber(labelTotal(data))}
+                <span className="dim">
+                  {" "}
+                  ({formatNumber(normalLabels)} normal / {formatNumber(anomalyLabels)} anomaly)
+                </span>
               </span>
-            </span>
-            <span>Matched: {formatNumber(data?.labeled_observations)}</span>
-            <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+              <span>Matched: {formatNumber(data?.labeled_observations)}</span>
+              <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+            </div>
           </div>
         </div>
+        {scorePath}
         <div className="eval-unavailable" role="status">
           <AlertIcon width={15} height={15} />
           <div>
             <p className="eval-unavailable__title">No score shown</p>
             <p className="eval-unavailable__body">
-              A single-class evaluation cannot distinguish signal from chance.
-              These labels remain useful, but precision, recall and ROC-AUC are
-              not computable yet.
+              A single-class run cannot distinguish signal from chance. These labels
+              remain useful, but precision, recall and ROC-AUC are not computable yet.
             </p>
           </div>
         </div>
@@ -481,28 +555,34 @@ export function EvaluationPage() {
         <ReadinessHero
           tone="warn"
           title="Labels required"
-          detail="Nothing on this ledger is scored until curated labels are matched to observations."
+          detail="Nothing in this run is scored until curated labels are matched to observations."
           matched={data?.labeled_observations}
           total={data?.total_observations}
           coverage={data?.coverage}
         />
-        <EmptyState
-          compact
-          title="No ground-truth labels"
-          body={
-            data?.reason ??
-            "This session has no curated labels. Metrics stay unavailable until a Normal and an Anomaly label are matched to observations."
-          }
-          glyph={<EvaluationIcon width={17} height={17} />}
-        />
-        <div className="eval-panel">
-          <ClassBalance normal={data?.label_counts?.Normal} anomaly={data?.label_counts?.Anomaly} />
-          <div className="eval-facts">
-            <span>Total observations: {formatNumber(data?.total_observations)}</span>
-            <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
-            <span>Labels stored: {formatNumber(labelTotal(data))}</span>
+        <div className="eval-state">
+          <EmptyState
+            compact
+            title="No ground-truth labels"
+            body={
+              data?.reason ??
+              "This session has no curated labels. Metrics stay unavailable until a Normal and an Anomaly label are matched to observations."
+            }
+            glyph={<EvaluationIcon width={17} height={17} />}
+          />
+          <div className="eval-panel">
+            <ClassBalance
+              normal={data?.label_counts?.Normal}
+              anomaly={data?.label_counts?.Anomaly}
+            />
+            <div className="eval-facts">
+              <span>Total observations: {formatNumber(data?.total_observations)}</span>
+              <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+              <span>Labels stored: {formatNumber(labelTotal(data))}</span>
+            </div>
           </div>
         </div>
+        {scorePath}
         <p className="note-line note-line--wrap">
           <span className="dot dot--warn" />
           <span>
@@ -519,20 +599,34 @@ export function EvaluationPage() {
         <ReadinessHero
           tone="warn"
           title="Metrics unavailable"
-          detail="The label ledger loaded, but no metric document came back with it."
+          detail="The label set loaded, but no metric document came back with it."
           matched={data?.labeled_observations}
           total={data?.total_observations}
           coverage={data?.coverage}
         />
-        <EmptyState
-          compact
-          title="Metrics unavailable"
-          body={
-            data?.reason ??
-            "The API reported labels but returned no metric payload. No fallback score is invented."
-          }
-          glyph={<AlertIcon width={17} height={17} />}
-        />
+        <div className="eval-state">
+          <EmptyState
+            compact
+            title="Metrics unavailable"
+            body={
+              data?.reason ??
+              "The API reported labels but returned no metric payload. No fallback score is invented."
+            }
+            glyph={<AlertIcon width={17} height={17} />}
+          />
+          <div className="eval-panel">
+            <ClassBalance
+              normal={data?.label_counts?.Normal}
+              anomaly={data?.label_counts?.Anomaly}
+            />
+            <div className="eval-facts">
+              <span>Labels stored: {formatNumber(labelTotal(data))}</span>
+              <span>Matched: {formatNumber(data?.labeled_observations)}</span>
+              <span>Predicted positive: {formatNumber(data?.predicted_positive)}</span>
+            </div>
+          </div>
+        </div>
+        {scorePath}
         <p className="note-line note-line--wrap">
           <span className="dot dot--warn" />
           <span>
@@ -549,7 +643,7 @@ export function EvaluationPage() {
       <PageHeader
         eyebrow="Ground truth"
         title="Evaluation & Reports"
-        lede="Measured agreement against curated labels, plus the session exports the API already serves. Nothing on this surface is scored until labels exist."
+        lede="Object verdicts and agreement scores for the selected run."
         aside={
           <div className="eval-aside">
             <label className="session-select eval-session-select">
@@ -582,22 +676,86 @@ export function EvaluationPage() {
         }
       />
 
-      <div className="layout-split eval-layout">
-        <Panel
-          title="Agreement ledger"
-          sub={
-            selected
-              ? `${selected.session} · ${formatNumber(
-                  data?.total_observations ?? selected.counts.observations,
-                )} observations`
-              : "label vs prediction"
-          }
-          actions={
-            data ? <span className="tag mono">coverage {coveragePercent(data)}</span> : undefined
-          }
-        >
-          {evaluationBody}
-        </Panel>
+      <QuantumHero
+        kicker="Ground truth · measurement integrity"
+        title={
+          <>
+            Agreement is a <em>measurement</em>
+          </>
+        }
+        description="Scores come only from curated labels matched to persisted observations. An unlabelled or single-class run is reported as unscoreable, never as zero."
+        status={pill.label}
+        metrics={[
+          {
+            label: "Observations",
+            value: formatNumber(data?.total_observations ?? selected?.counts.observations),
+            hint: "in this session",
+          },
+          {
+            label: "Labels matched",
+            value: formatNumber(data?.labeled_observations),
+            hint: `${formatNumber(labelTotal(data))} stored`,
+            tone: "accent",
+          },
+          {
+            label: "Coverage",
+            value:
+              data?.coverage === null || data?.coverage === undefined
+                ? "—"
+                : `${Math.round(data.coverage * 100)}%`,
+            hint: "labelled share (rounded)",
+            tone: "warn",
+          },
+          {
+            label: "Predicted positive",
+            value: formatNumber(data?.predicted_positive),
+            hint: data?.positive_rule ?? "Suspicious + Irregular",
+          },
+          {
+            label: "Score state",
+            value:
+              state === "ready"
+                ? "scored"
+                : state === "insufficient"
+                  ? "single class"
+                  : state === "no_labels"
+                    ? "unlabelled"
+                    : state === "metrics_missing"
+                      ? "metrics missing"
+                      : "—",
+            hint: "never invented",
+            tone: state === "ready" ? "normal" : "bad",
+          },
+        ]}
+      />
+
+      <div
+        className={`layout-split eval-layout ${
+          state === "ready" ? "" : "eval-layout--stacked"
+        }`.trim()}
+      >
+        <section className="panel eval-scores" aria-labelledby="eval-scores-title">
+          <header className="panel__head">
+            <div className="panel__titles">
+              <span className="panel__title" id="eval-scores-title">
+                Scoring
+              </span>
+              <span className="panel__sub">
+                {selected
+                  ? `${selected.session} · ${formatNumber(
+                      data?.total_observations ?? selected.counts.observations,
+                    )} observations`
+                  : "Label against prediction"}
+              </span>
+            </div>
+            {data ? (
+              <div className="panel__actions">
+                <span className="tag mono">coverage {coveragePercent(data)}</span>
+              </div>
+            ) : null}
+          </header>
+          <div className="panel__body">{evaluationBody}</div>
+        </section>
 
         <div className="stack gap-14">
           <Panel
@@ -677,11 +835,6 @@ export function EvaluationPage() {
                 )}
               </div>
             )}
-            <p className="note-line">
-              <span className="dot dot--live" />
-              Served by the session API — the console downloads the file, it never
-              fabricates one.
-            </p>
           </Panel>
 
           <Panel
@@ -749,14 +902,6 @@ export function EvaluationPage() {
                     </span>
                   </div>
                 </div>
-                <p className="note-line note-line--wrap">
-                  <span className="dot dot--warn" />
-                  <span>
-                    Labels are matched to observations by frame and track. Stored
-                    labels can include rows that match no observation, so coverage
-                    reflects matched labels only.
-                  </span>
-                </p>
               </div>
             ) : evaluation.status === "loading" ? (
               <LoadingRows rows={4} label="Loading labels" />
@@ -810,18 +955,15 @@ export function EvaluationPage() {
                     <ArrowRightIcon width={14} height={14} />
                   </span>
                 </Link>
-                <p className="note-line note-line--wrap">
-                  <span className="dot dot--live" />
-                  <span>
-                    These links carry the session into the evidence surfaces; they
-                    do not invent event or track identifiers.
-                  </span>
-                </p>
               </div>
             )}
           </Panel>
         </div>
       </div>
+
+      <ResultsDashboard sessionId={selectedId ?? ""} title="Results dashboard" />
+
+      <ReportGuide />
     </>
   );
 }

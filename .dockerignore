@@ -3,6 +3,13 @@
 .gitignore
 .venv
 .venv-audit
+.env
+.env.*
+
+# Frontend dependencies/build output are not used by the API image; keeping
+# them out avoids a huge, platform-specific build context and image layer.
+frontend/node_modules
+frontend/dist
 
 # Python caches & test artifacts
 __pycache__
@@ -19,6 +26,7 @@ data/*.db
 .DS_Store
 .idea
 .vscode
+artifacts
 
 # Large logs from local runs
 *.log

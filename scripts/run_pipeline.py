@@ -8,7 +8,7 @@ Usage:
 
 Writes per-session SQLite logs to data/app_data.db and an annotated video if
 --save is given. A run is persisted only after it finishes successfully, using
-the same `save_session_to_db` path as the API and Streamlit.
+the same `save_session_to_db` path as the API.
 """
 from __future__ import annotations
 

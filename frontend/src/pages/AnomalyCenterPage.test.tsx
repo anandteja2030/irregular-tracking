@@ -282,7 +282,7 @@ describe("anomaly intelligence center", () => {
       "textContent",
       "Anomaly Intelligence Center",
     );
-    expect(await screen.findByText("25")).toBeTruthy();
+    expect((await screen.findAllByText("25")).length).toBeGreaterThan(0);
     expect(screen.getByText("2")).toBeTruthy();
     expect(await pagerText("1–20 / 25 events")).toBeTruthy();
     expect(await screen.findByRole("link", { name: /T00/ })).toBeTruthy();
@@ -345,8 +345,8 @@ describe("anomaly intelligence center", () => {
     await waitFor(() => expect(evidenceText()).toContain("not evidence that no rule fired"));
 
     fireEvent.click(screen.getByRole("button", { name: "Open investigation for event 23" }));
-    await waitFor(() => expect(evidenceText()).toContain("no rule trigger was recorded"));
-    expect(evidenceText()).toContain("No rule, ML note or scene note was recorded");
+    await waitFor(() => expect(evidenceText()).toContain("No rule trigger recorded"));
+    expect(evidenceText()).toContain("No rule, ML or scene note recorded");
   });
 
   it("presents the summary as measured metric cards under named sections", async () => {

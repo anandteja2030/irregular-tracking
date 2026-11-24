@@ -169,10 +169,7 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
           <LoadingRows rows={2} label="Loading calibration thresholds" />
         )}
         {config.status === "error" && calibration.available && (
-          <p className="hint hint--flush">
-            Calibration thresholds could not be read, so gate coverage is unavailable. The
-            sample, track and duration values above are still persisted values.
-          </p>
+          <p className="hint hint--flush">Gate coverage unavailable.</p>
         )}
 
         <div className="scene-confidence">
@@ -180,23 +177,14 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
             <span className="mini-label">Calibration confidence</span>
             <strong className="mono">Not exposed</strong>
           </div>
-          <p>
-            The engine publishes a readiness boolean and its evidence counts, not a
-            statistical confidence. Readiness coverage is the narrowest gate above and is
-            not a probability.
-          </p>
         </div>
 
         {isWarming && (
           <div className="scene-alert scene-alert--warn">
-            <span className="note__label">Not ready — not failed</span>
-            <p>
-              This run ended before every readiness gate was met
-              {assessment.limiting
-                ? `; ${assessment.limiting.label.toLowerCase()} is the limiting gate.`
-                : "."}{" "}
-              The API does not label this state as a calibration failure.
-            </p>
+            <span className="note__label">
+              Not ready — not failed
+              {assessment.limiting ? ` · limiting gate: ${assessment.limiting.label}` : ""}
+            </span>
           </div>
         )}
 
@@ -209,26 +197,12 @@ export function SceneCalibration({ scene, config }: SceneCalibrationProps) {
               {calibration.reason ??
                 "No reason was returned for the missing calibration artifact."}
             </p>
-            <p>
-              {isHistorical
-                ? "This is missing history, not a failed calibration. Speed and direction values below are derived from persisted observations and labelled accordingly."
-                : "No observation-derived scene baseline is asserted when the API cannot support one."}
-            </p>
           </div>
         )}
 
         {calibration.available && !calibration.persisted && (
-          <p className="hint hint--flush">
-            These values are the API process's live calibrator, not a stored
-            historical snapshot; they are not retained after a restart.
-          </p>
+          <p className="hint hint--flush">Live calibrator · not retained after restart.</p>
         )}
-
-        <p className="hint hint--flush">
-          Observed seconds are movement evidence accumulated across tracks, so they can
-          exceed the clip's wall-clock duration. The direction bin is{" "}
-          {thresholds ? `${formatNumber(thresholds.direction_bin_deg, 0)}°` : "—"}.
-        </p>
       </div>
     </Panel>
   );

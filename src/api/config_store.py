@@ -2,8 +2,7 @@
 
 The engine owns `config.config.SETTINGS`; this module is the only place the
 API mutates it. Mutations happen *in place* so every already-imported module
-(`load_config()` returns the same object) sees the new values immediately -
-exactly as the Streamlit Settings page does today.
+(`load_config()` returns the same object) sees the new values immediately.
 
 Guarantees
 ----------
@@ -153,11 +152,18 @@ def apply_patch(patch: dict) -> tuple[dict, list[str]]:
 
 # --------------------------------------------------------------------- resets
 def reset_config() -> tuple[dict, list[str]]:
-    """Restore every engine setting to its dataclass default (in place)."""
+    """Restore every engine setting to its dataclass default (in place).
+
+    ``paths`` is reported as read-only by the API and is deliberately kept:
+    resetting it would silently move the database or sample directory for a
+    process started with a custom configuration.
+    """
     before = serialize_config()
     defaults = Settings()
     cfg = load_config()
     for field in fields(cfg):
+        if field.name == "paths":
+            continue
         setattr(cfg, field.name, getattr(defaults, field.name))
     after = serialize_config()
     return after, _diff(before, after)

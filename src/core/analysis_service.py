@@ -1,4 +1,4 @@
-"""Analysis service shared by the dashboard, the API and the CLI.
+"""Analysis service shared by the API, console and CLI.
 
 Runs the existing TrackingPipeline over a video source once, with real
 progress reporting, and packages everything a consumer needs:
@@ -13,9 +13,8 @@ progress reporting, and packages everything a consumer needs:
 Nothing here is fabricated: every row comes from a real pipeline entry, and
 `save_session_to_db` keeps each session's rows isolated from history.
 
-This module is deliberately framework-neutral (no Streamlit import): it used
-to live in `src/ui/session.py`, which now re-exports it for backward
-compatibility.
+This module is deliberately framework-neutral: it used to live in
+`src/ui/session.py`, which now re-exports it for backward compatibility.
 """
 from __future__ import annotations
 
@@ -37,6 +36,7 @@ from src.analysis.logger import (
     CALIBRATION_SNAPSHOT_VERSION,
     ResultLogger,
 )
+from src.analysis.verdicts import track_verdict
 from src.pipeline import FrameResult, TrackingPipeline
 from src.video.video_input import VideoSource
 
@@ -49,12 +49,13 @@ UPLOAD_MAX_AGE_S = 24 * 3600
 
 # Flat per-observation schema shared by tables, CSV export and the DB row
 # mapper. `rules_json` holds the structured rule evidence for one row.
-OBS_COLS = ["frame", "ts_s", "track_id", "color", "shape", "level",
+OBS_COLS = ["frame", "ts_s", "track_id", "color", "shape", "class_name", "level",
             "fused_score", "rule_score", "ml_score", "scene_score",
             "speed_px_s", "direction_deg", "cx", "cy", "zone",
             "zone_dwell_s", "rules_json", "ml_note", "scene_note", "why"]
 
-TRACK_COLS = ["track_id", "color", "shape", "first_frame", "last_frame",
+TRACK_COLS = ["track_id", "color", "shape", "class_name",
+              "first_frame", "last_frame",
               "duration_s", "n_obs", "mean_speed_px_s", "max_speed_px_s",
               "path_length_px", "straightness", "start_x", "start_y",
               "end_x", "end_y", "directions", "n_events", "worst_level"]
@@ -64,7 +65,7 @@ class AnalysisCancelled(Exception):
     """A caller-supplied `should_stop` hook requested cancellation mid-run.
 
     Raised by `run_analysis` only when the optional hook is provided; the CLI
-    and every Streamlit call leave it unset, so their behaviour is unchanged.
+    and every other caller leave it unset, so their behaviour is unchanged.
     """
 
     def __init__(self, session: str):
@@ -179,6 +180,70 @@ def _thumb(bgr: np.ndarray) -> np.ndarray:
                       interpolation=cv2.INTER_AREA)
 
 
+def preview_thumb(bgr: np.ndarray) -> np.ndarray:
+    """Public alias for the downscale used by retained preview frames."""
+    return _thumb(bgr)
+
+
+def observation_row(entry: dict, fps: float) -> dict:
+    """Map one pipeline entry onto the flat OBS_COLS row contract.
+
+    Shared by the file/CLI loop and the live-camera path so both persist
+    byte-identical observation rows for the same pipeline output.
+    """
+    frame_idx = int(entry["frame_idx"])
+    return {
+        "frame": frame_idx,
+        "ts_s": round(frame_idx / max(fps, 1e-6), 2),
+        "track_id": entry["track_id"],
+        "color": entry.get("color"),
+        "shape": entry.get("shape"),
+        "class_name": entry.get("class_name"),
+        "level": entry["level"],
+        "fused_score": entry["fused_score"],
+        "rule_score": entry["rule_score"],
+        "ml_score": entry["ml_score"],
+        "scene_score": entry["scene_score"],
+        "speed_px_s": entry["speed_px_s"],
+        "direction_deg": entry["direction_deg"],
+        "cx": round(entry["centroid"][0], 1),
+        "cy": round(entry["centroid"][1], 1),
+        "zone": entry.get("in_zone"),
+        "zone_dwell_s": entry.get("zone_dwell_s", 0.0),
+        "rules_json": json.dumps(entry.get("rules", [])),
+        "ml_note": entry.get("ml_note", ""),
+        "scene_note": entry.get("scene_note", ""),
+        "why": entry.get("why", ""),
+    }
+
+
+def source_has_real_objects(src: str, probe_frames: int = 12) -> bool:
+    """Does this source contain objects the pretrained detector recognises?
+
+    The engine has two candidate sources: the pretrained COCO detector for
+    real footage, and the original colour/contour engine that the bundled
+    synthetic samples are generated for. The source path cannot tell them
+    apart (an upload can contain either), so the first frames are probed with
+    the real detector: a synthetic clip of coloured shapes yields no car,
+    truck or person, while camera footage yields them immediately.
+    """
+    from src.video.object_detector import get_object_detector
+
+    detector = get_object_detector()
+    if not detector.available:
+        return False
+    try:
+        with VideoSource(src=src) as vs:
+            for i, vf in enumerate(vs):
+                if i >= probe_frames:
+                    break
+                if detector.detect(vf.bgr, vf.index):
+                    return True
+    except (OSError, TypeError, ValueError, cv2.error):
+        return False
+    return False
+
+
 def run_analysis(src: str, source_label: str, source_kind: str,
                  max_frames: int | None, session: str,
                  progress: Callable[[int, int], None] | None = None,
@@ -212,7 +277,13 @@ def run_analysis(src: str, source_label: str, source_kind: str,
             total = vs.frame_count() or 0
             if max_frames:
                 total = min(total, max_frames) if total else max_frames
-            pipeline = TrackingPipeline(session=session)
+            # Real footage gets the pretrained class detector; synthetic
+            # colour-shape clips keep the colour/contour engine they are built
+            # for. The content, not the path, decides.
+            pipeline = TrackingPipeline(
+                session=session,
+                use_object_detector=(not synthetic
+                                     and source_has_real_objects(src)))
             rows: list[dict] = []
             previews: list[PreviewFrame] = []
             processed = 0
@@ -233,28 +304,7 @@ def run_analysis(src: str, source_label: str, source_kind: str,
                         annotated=_thumb(res.annotated_bgr),
                         original=_thumb(vf.bgr)))
                 for e in res.entries:
-                    rows.append({
-                        "frame": e["frame_idx"],
-                        "ts_s": round(e["frame_idx"] / max(fps, 1e-6), 2),
-                        "track_id": e["track_id"],
-                        "color": e.get("color"),
-                        "shape": e.get("shape"),
-                        "level": e["level"],
-                        "fused_score": e["fused_score"],
-                        "rule_score": e["rule_score"],
-                        "ml_score": e["ml_score"],
-                        "scene_score": e["scene_score"],
-                        "speed_px_s": e["speed_px_s"],
-                        "direction_deg": e["direction_deg"],
-                        "cx": round(e["centroid"][0], 1),
-                        "cy": round(e["centroid"][1], 1),
-                        "zone": e.get("in_zone"),
-                        "zone_dwell_s": e.get("zone_dwell_s", 0.0),
-                        "rules_json": json.dumps(e.get("rules", [])),
-                        "ml_note": e.get("ml_note", ""),
-                        "scene_note": e.get("scene_note", ""),
-                        "why": e.get("why", ""),
-                    })
+                    rows.append(observation_row(e, fps))
                 processed += 1
                 if on_frame is not None:
                     on_frame(res, fps)
@@ -295,6 +345,32 @@ def run_analysis(src: str, source_label: str, source_kind: str,
             error=friendly_open_error(Path(str(src)).name, exc))
 
 
+def build_result_from_observations(
+        *, session: str, source_label: str, source_kind: str,
+        is_synthetic: bool, started_ts: str, ended_ts: str, wall_s: float,
+        fps: float, frame_width: int, frame_height: int,
+        frames_processed: int, max_frames: int | None,
+        previews: list[PreviewFrame], rows: list[dict], summaries: list,
+        scene) -> SessionResult:
+    """Assemble a `SessionResult` from already-processed pipeline output.
+
+    Used by live-camera sessions, whose frames are scored one at a time by
+    the same ``TrackingPipeline`` the file loop uses. Nothing is recomputed or
+    synthesised here: the caller supplies the measured frames, rows and scene.
+    """
+    obs = pd.DataFrame(rows, columns=OBS_COLS)
+    tracks, track_points = _track_tables(obs, summaries, fps)
+    return SessionResult(
+        session=session, source_label=source_label,
+        source_path="live:camera", source_kind=source_kind,
+        is_synthetic=is_synthetic, started_ts=started_ts, ended_ts=ended_ts,
+        wall_s=wall_s, fps=fps, frame_width=frame_width,
+        frame_height=frame_height, frames_available=frames_processed,
+        frames_processed=frames_processed, max_frames=max_frames,
+        previews=previews, obs=obs, tracks=tracks, track_points=track_points,
+        scene=scene, summaries=summaries)
+
+
 def _track_tables(obs: pd.DataFrame, summaries: list, fps: float
                   ) -> tuple[pd.DataFrame, dict]:
     """Per-track table + trajectory maps, all derived from real observations."""
@@ -309,12 +385,16 @@ def _track_tables(obs: pd.DataFrame, summaries: list, fps: float
         s = stats_by_id.get(int(tid))
         st = s["stats"] if s else None
         levels = grp["level"].value_counts().to_dict()
-        worst = ("Irregular" if levels.get("Irregular")
-                 else "Suspicious" if levels.get("Suspicious") else "Normal")
+        # The object's verdict needs sustained evidence; the per-observation
+        # levels above are kept untouched for the event ledger.
+        worst = track_verdict(len(grp), int((grp["level"] != "Normal").sum()),
+                              int(levels.get("Irregular", 0)))
+        classes = grp["class_name"].dropna()
         rows.append({
             "track_id": int(tid),
             "color": grp["color"].iloc[-1],
             "shape": grp["shape"].iloc[-1],
+            "class_name": (classes.mode().iloc[0] if not classes.empty else None),
             "first_frame": int(grp["frame"].min()),
             "last_frame": int(grp["frame"].max()),
             "duration_s": round((grp["frame"].max() - grp["frame"].min())
@@ -412,37 +492,42 @@ def calibration_snapshot(scene, captured_ts: str | None) -> dict | None:
 
 
 def save_session_to_db(result: SessionResult) -> dict:
-    """Persist a run under its own session id (replaces that session only).
+    """Persist a run under its own session id, atomically.
 
     Rows are written in dependency order: observations and summaries, then the
     `run_stats` parent row, then the batch of trajectory points and the
     calibration snapshot that reference it. Re-saving the same session
-    replaces its rows instead of duplicating them.
+    replaces its rows instead of duplicating them. Every write runs in one
+    transaction, so a failure restores the previously saved session rather
+    than leaving it cleared or partially rewritten.
     """
     cfg = load_config()
     log = ResultLogger(cfg.paths.db, session=result.session)
     try:
-        log.clear_session_events(result.session)
-        log.clear_session_summaries(result.session)
-        log.clear_session_points(result.session)
-        log.clear_session_calibration(result.session)
-        for rec in result.obs.to_dict("records"):
-            log.log_event(int(rec["frame"]), _db_event_row(rec))
-        for s in result.summaries:
-            log.log_track_summary(s["stats"], s["color"], s["shape"],
-                                  s["first_frame"], s["last_frame"])
-        log.log_run({
-            "session": result.session, "source": result.source_label,
-            "kind": result.source_kind, "synthetic": result.is_synthetic,
-            "frames": result.frames_processed, "width": result.frame_width,
-            "height": result.frame_height, "fps": result.fps,
-            "wall_s": result.wall_s, "max_frames": result.max_frames,
-            "started_ts": result.started_ts, "ended_ts": result.ended_ts,
-        })
-        points = log.log_track_points(result.session, trajectory_points(result))
-        snapshot = calibration_snapshot(result.scene, result.ended_ts)
-        if snapshot is not None:
-            log.log_calibration(result.session, snapshot)
+        with log.transaction():
+            log.clear_session_events(result.session)
+            log.clear_session_summaries(result.session)
+            log.clear_session_points(result.session)
+            log.clear_session_calibration(result.session)
+            for rec in result.obs.to_dict("records"):
+                log.log_event(int(rec["frame"]), _db_event_row(rec))
+            for s in result.summaries:
+                log.log_track_summary(s["stats"], s["color"], s["shape"],
+                                      s["first_frame"], s["last_frame"],
+                                      class_name=s.get("class_name"))
+            log.log_run({
+                "session": result.session, "source": result.source_label,
+                "kind": result.source_kind, "synthetic": result.is_synthetic,
+                "frames": result.frames_processed, "width": result.frame_width,
+                "height": result.frame_height, "fps": result.fps,
+                "wall_s": result.wall_s, "max_frames": result.max_frames,
+                "started_ts": result.started_ts, "ended_ts": result.ended_ts,
+            })
+            points = log.log_track_points(result.session,
+                                          trajectory_points(result))
+            snapshot = calibration_snapshot(result.scene, result.ended_ts)
+            if snapshot is not None:
+                log.log_calibration(result.session, snapshot)
         return {"events": len(result.obs), "summaries": len(result.summaries),
                 "points": points, "calibration": snapshot is not None}
     finally:

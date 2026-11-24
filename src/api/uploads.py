@@ -177,6 +177,26 @@ def get_upload(upload_id: str) -> UploadRecord | None:
     return record
 
 
+def clear_all() -> int:
+    """Delete every uploaded file and forget its registry entry.
+
+    Used by the explicit data purge. A file that cannot be removed is still
+    dropped from the registry so it can never be served again; the count
+    reports files actually deleted.
+    """
+    with _LOCK:
+        records = list(_REGISTRY.values())
+        _REGISTRY.clear()
+    removed = 0
+    for record in records:
+        try:
+            record.path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def cleanup_stale(active_refs: Iterable[str] | None = None) -> int:
     """Delete upload files past their TTL that no active job still needs."""
     keep = set(active_refs or ())

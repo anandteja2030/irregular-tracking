@@ -56,6 +56,24 @@ export function Sidebar() {
         ))}
       </nav>
 
+      <div className="rail__matrix" aria-hidden="true">
+        <span className="rail__matrix-title mono">SIGNAL MATRIX</span>
+        <div className="rail__matrix-grid">
+          {Array.from({ length: 24 }, (_, index) => (
+            <i
+              key={index}
+              style={{ height: `${18 + ((index * 37) % 82)}%` }}
+            />
+          ))}
+        </div>
+        <div className="rail__matrix-stages mono">
+          <span>DECODE</span>
+          <span>TRACK</span>
+          <span>FUSE</span>
+          <span>LABEL</span>
+        </div>
+      </div>
+
       <div className="rail__footer">
         <div className="rail-status" title={statusSub}>
           <span

@@ -35,8 +35,8 @@ class IsolationAnomalyDetector:
     def __init__(self, config: MLAnomalyConfig | None = None):
         self.cfg = config or load_config().anomaly
         self._global_X: deque = deque(maxlen=2000)
-        # functools.partial (not a lambda) so the detector stays picklable:
-        # Streamlit's @st.cache_data pickles whatever a cached fn returns.
+        # functools.partial (not a lambda) so the detector stays picklable
+        # for callers that cache or serialize it.
         self._per_track: dict[int, deque] = defaultdict(
             partial(deque, maxlen=self.cfg.per_object_window))
         self._since_refit = 0

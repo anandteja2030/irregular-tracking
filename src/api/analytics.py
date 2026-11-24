@@ -29,7 +29,7 @@ MEDIA_LIMITATION = (
     "The pipeline does not write frames or an annotated video to disk. Preview "
     "frames (JPEG, every {stride}th frame, max 240 per session) are retained in "
     "memory only for sessions analysed by this API process, so they disappear "
-    "on restart and are not available for CLI/Streamlit historical sessions.")
+    "on restart and are not available for CLI historical sessions.")
 TRAJECTORY_LIMITATION = (
     "Trajectory points were not persisted in SQLite by older versions of the "
     "pipeline. SQLite now stores every observed centroid in the indexed "
@@ -109,7 +109,8 @@ def evidence_payload(evidence: dict | None, *, session: str) -> dict:
         "zone": evidence.get("zone"),
         "zone_dwell_s": evidence.get("zone_dwell_s"),
         "appearance": {"color": evidence.get("color"),
-                       "shape": evidence.get("shape")},
+                       "shape": evidence.get("shape"),
+                       "class_name": evidence.get("class_name")},
     }
 
 
@@ -128,7 +129,7 @@ def media_payload(session: str) -> dict:
             "available": False,
             "reason": "No annotated video is produced or stored by the "
                       "pipeline; annotations exist only in the live preview "
-                      "frames and the Streamlit UI.",
+                      "frames and the console.",
         },
         "notes": [
             MEDIA_LIMITATION.format(stride=art.preview_stride if art else 6),

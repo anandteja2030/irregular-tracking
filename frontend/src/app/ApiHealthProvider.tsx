@@ -9,7 +9,10 @@ const ApiHealthContext = createContext<ResourceState<Health> | null>(null);
 
 /** Single liveness poll shared by the rail, the top bar and the overview. */
 export function ApiHealthProvider({ children }: { children: ReactNode }) {
-  const health = useResource(api.health, { pollMs: 10_000 });
+  // Uptime changes on every poll, so each one re-renders every consumer of the
+  // health context. Twenty seconds keeps the badge live without repainting the
+  // whole workspace every ten.
+  const health = useResource(api.health, { pollMs: 20_000 });
   const value = useMemo(() => health, [health]);
   return <ApiHealthContext.Provider value={value}>{children}</ApiHealthContext.Provider>;
 }

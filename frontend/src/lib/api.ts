@@ -18,8 +18,13 @@ import type {
   Health,
   JobList,
   JobSnapshot,
+  LiveFrame,
+  LiveSession,
+  LiveStopResult,
   MediaResponse,
+  ObjectEvidenceResponse,
   ObservationItem,
+  PurgeResponse,
   SceneResponse,
   SessionDetail,
   SessionList,
@@ -99,7 +104,7 @@ interface RequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   method?: "GET" | "POST" | "PUT";
-  body?: string;
+  body?: string | FormData;
   headers?: Record<string, string>;
 }
 
@@ -460,6 +465,15 @@ export const api = {
     request<SceneResponse>(`${sessionPath(sessionId)}/scene`, { signal }),
   media: (sessionId: string, signal?: AbortSignal) =>
     request<MediaResponse>(`${sessionPath(sessionId)}/media`, { signal }),
+  objectEvidence: (
+    sessionId: string,
+    params: { limit?: number; window?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    request<ObjectEvidenceResponse>(
+      `${sessionPath(sessionId)}/object-evidence${queryString(params)}`,
+      { signal },
+    ),
 
   /* -------------------------------------------------------- video studio */
   uploadVideo,
@@ -488,6 +502,39 @@ export const api = {
   evaluation: (sessionId: string, signal?: AbortSignal) =>
     request<EvaluationResponse>(`${sessionPath(sessionId)}/evaluation`, { signal }),
   downloadExport: downloadSessionExport,
+
+  /* ------------------------------------------------------- live camera */
+  liveStart: (signal?: AbortSignal) =>
+    request<{ session: LiveSession }>("/live/sessions", {
+      method: "POST",
+      signal,
+    }),
+  liveFrame: (liveId: string, frame: Blob, signal?: AbortSignal) => {
+    const form = new FormData();
+    form.append("frame", frame, "frame.jpg");
+    return request<LiveFrame>(
+      `/live/sessions/${encodeURIComponent(liveId)}/frames`,
+      { method: "POST", body: form, timeoutMs: 30_000, signal },
+    );
+  },
+  liveStop: (liveId: string, signal?: AbortSignal) =>
+    request<{ session: LiveStopResult }>(
+      `/live/sessions/${encodeURIComponent(liveId)}/stop`,
+      { method: "POST", timeoutMs: 60_000, signal },
+    ),
+  /** Erase every persisted session and in-memory artifact. Irreversible. */
+  purgeAll: (signal?: AbortSignal) =>
+    request<PurgeResponse>("/admin/reset", {
+      method: "POST",
+      timeoutMs: 60_000,
+      signal,
+    }),
+
+  liveCancel: (liveId: string, signal?: AbortSignal) =>
+    request<{ session: { live_id: string; state: string } }>(
+      `/live/sessions/${encodeURIComponent(liveId)}/cancel`,
+      { method: "POST", signal },
+    ),
 };
 
 export function describeError(error: unknown): string {

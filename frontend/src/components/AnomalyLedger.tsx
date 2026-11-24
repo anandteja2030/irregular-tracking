@@ -5,8 +5,10 @@ import {
   anomalyRules,
   anomalyTypeLabel,
   anomalyTypeOptions,
+  eventWhy,
   eventTrackIds,
   filterAnomalies,
+  ruleLabel,
   sortAnomalies,
   type AnomalyFilters,
   type AnomalySort,
@@ -77,7 +79,6 @@ export function AnomalyLedger({
   }, [offset, visible.length]);
 
   const page = visible.slice(offset, offset + PAGE_SIZE);
-  const selectedVisible = visible.some((event) => event.event_id === selectedEventId);
   const filtersActive =
     severity !== "all" || trackId !== null || eventType !== null || query.trim() !== "";
 
@@ -195,10 +196,6 @@ export function AnomalyLedger({
             </button>
           )}
         </div>
-        <p className="hint hint--flush ledger-scope">
-          Normal observations are counted in the summary but are not anomaly events, so this
-          ledger cannot list them. Search and filters run across every loaded event.
-        </p>
       </div>
 
       {status === "error" ? (
@@ -226,6 +223,7 @@ export function AnomalyLedger({
                   <th>Track</th>
                   <th>Level</th>
                   <th>Event type</th>
+                  <th>Reason</th>
                   <th>Fused</th>
                   <th>Rule</th>
                   <th>ML</th>
@@ -235,6 +233,15 @@ export function AnomalyLedger({
               <tbody>
                 {page.map((event) => {
                   const rules = anomalyRules(event);
+                  const why = eventWhy(event);
+                  const reason =
+                    rules.length > 0
+                      ? rules.map(ruleLabel).join(" · ")
+                      : event.evidence?.ml_note
+                        ? "ML model"
+                        : event.evidence?.scene_note
+                          ? "Scene deviation"
+                          : "—";
                   const active = selectedEventId === event.event_id;
                   return (
                     <tr
@@ -284,6 +291,9 @@ export function AnomalyLedger({
                       >
                         {truncateMiddle(anomalyTypeLabel(event), 42)}
                       </td>
+                      <td className="table__why" title={why}>
+                        {reason}
+                      </td>
                       <td>
                         <Score value={event.scores.fused} />
                       </td>
@@ -310,12 +320,11 @@ export function AnomalyLedger({
               onChange={setOffset}
               label="events"
             />
-            <p className="hint hint--flush ledger-footnote">
-              {selectedVisible ? null : "Select a row or an event ID to open its investigation. "}
-              {truncated
-                ? `Loaded ${formatNumber(events.length)} of ${formatNumber(totalEvents)} reported events; filters and timeline cover only the loaded set.`
-                : `All ${formatNumber(events.length)} reported elevated events are loaded.`}
-            </p>
+            {truncated ? (
+              <p className="hint hint--flush ledger-footnote">
+                Loaded {formatNumber(events.length)} of {formatNumber(totalEvents)} reported events.
+              </p>
+            ) : null}
           </div>
         </>
       ) : (

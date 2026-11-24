@@ -4,7 +4,7 @@
 per anomaly manifestation rate-limited to avoid flooding, configurable), plus:
 
   * track_summaries   one row per completed track (trajectory aggregates)
-  * queries for the dashboard: recent anomalies, per-level counts
+  * queries for the API/console: recent anomalies, per-level counts
 
 CSV export mirrors the event table for spreadsheets.
 """
@@ -14,9 +14,16 @@ import csv
 import json
 import sqlite3
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.analysis.snapshot_validation import (
+    CALIBRATION_SNAPSHOT_VERSION,
+    SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS,
+    decode_calibration_snapshot,
+    snapshot_version,
+)
 
 EVENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS track_events (
@@ -39,6 +46,7 @@ CREATE TABLE IF NOT EXISTS track_summaries (
     session TEXT,
     color TEXT,
     shape TEXT,
+    class_name TEXT,
     n_points INTEGER,
     n_seconds REAL,
     mean_speed_px_s REAL,
@@ -102,13 +110,10 @@ CREATE INDEX IF NOT EXISTS idx_calibration_captured
 # Schema version for the persistence layer. Fresh databases are created at
 # this version; older databases are upgraded in place by the idempotent
 # `CREATE TABLE/INDEX IF NOT EXISTS` statements above plus `_migrate_schema`.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-# Version of the persisted calibration document shape. Increment only when the
-# stored JSON changes; readers validate this before interpreting any fields.
-CALIBRATION_SNAPSHOT_VERSION = 1
-SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS = frozenset(
-    {CALIBRATION_SNAPSHOT_VERSION})
+# CALIBRATION_SNAPSHOT_VERSION and SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS
+# are re-exported from snapshot_validation so existing imports keep working.
 
 # Older databases keyed track_summaries by track_id alone, so a second
 # session silently overwrote the first session's rows. This rebuild keeps
@@ -120,6 +125,7 @@ CREATE TABLE track_summaries (
     session TEXT,
     color TEXT,
     shape TEXT,
+    class_name TEXT,
     n_points INTEGER,
     n_seconds REAL,
     mean_speed_px_s REAL,
@@ -131,12 +137,12 @@ CREATE TABLE track_summaries (
     last_frame INTEGER,
     PRIMARY KEY (session, track_id)
 );
-INSERT INTO track_summaries (track_id, session, color, shape, n_points,
-    n_seconds, mean_speed_px_s, max_speed_px_s, path_length_px, straightness,
-    directions, first_frame, last_frame)
-SELECT track_id, session, color, shape, n_points, n_seconds, mean_speed_px_s,
-    max_speed_px_s, path_length_px, straightness, directions, first_frame,
-    last_frame
+INSERT INTO track_summaries (track_id, session, color, shape, class_name,
+    n_points, n_seconds, mean_speed_px_s, max_speed_px_s, path_length_px,
+    straightness, directions, first_frame, last_frame)
+SELECT track_id, session, color, shape, NULL, n_points, n_seconds,
+    mean_speed_px_s, max_speed_px_s, path_length_px, straightness, directions,
+    first_frame, last_frame
 FROM track_summaries_legacy;
 DROP TABLE track_summaries_legacy;
 """
@@ -148,6 +154,7 @@ class ResultLogger:
     def __init__(self, db_path: Path | str, session: str = "session0"):
         self.db_path = Path(db_path)
         self.session = session
+        self._transaction_depth = 0
         self._conn = sqlite3.connect(self.db_path)
         # Referential integrity is enforced for the new point/snapshot tables.
         # Events and summaries predate these foreign keys and stay untouched.
@@ -167,6 +174,11 @@ class ResultLogger:
 
     def _migrate_schema(self) -> None:
         """Record the persistence schema version (idempotent, data-preserving)."""
+        columns = [row[1] for row in self._conn.execute(
+            "PRAGMA table_info(track_summaries)").fetchall()]
+        if "class_name" not in columns:
+            self._conn.execute(
+                "ALTER TABLE track_summaries ADD COLUMN class_name TEXT")
         current = self._conn.execute("PRAGMA user_version").fetchone()[0]
         if current < SCHEMA_VERSION:
             # Tables and indexes are already created by EVENT_SCHEMA above;
@@ -177,6 +189,46 @@ class ResultLogger:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    @contextmanager
+    def transaction(self):
+        """Group every write until the outermost context exits.
+
+        Nested contexts join the outer transaction instead of committing:
+        only the root context commits on success or rolls back on failure.
+        Callers must not swallow an exception inside the block if they want
+        the partial work rolled back; the exception must reach the root.
+        """
+        if self._conn is None:
+            raise sqlite3.ProgrammingError("logger is closed")
+        if self._transaction_depth:
+            self._transaction_depth += 1
+            try:
+                yield self
+            finally:
+                self._transaction_depth -= 1
+            return
+
+        self._conn.execute("BEGIN IMMEDIATE")
+        self._transaction_depth = 1
+        try:
+            yield self
+        except BaseException:
+            self._conn.rollback()
+            raise
+        else:
+            try:
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+        finally:
+            self._transaction_depth = 0
+
+    def _commit(self) -> None:
+        """Commit standalone writes; the transaction context owns grouped ones."""
+        if not self._transaction_depth:
+            self._conn.commit()
 
     # ------------------------------------------------------------ events
     def log_event(self, frame_idx: int, entry: dict) -> None:
@@ -196,7 +248,7 @@ class ResultLogger:
                     entry.get("speed_px_s", 0.0), entry.get("direction_deg"),
                     entry.get("why", ""),
                 ))
-        self._conn.commit()
+        self._commit()
 
     # ------------------------------------------------------------ delete
     def clear_session_events(self, session: str) -> int:
@@ -204,7 +256,7 @@ class ResultLogger:
         with closing(self._conn.cursor()) as cur:
             cur.execute("DELETE FROM track_events WHERE session = ?", (session,))
             n = cur.rowcount
-        self._conn.commit()
+        self._commit()
         return n
 
     def clear_session_summaries(self, session: str) -> int:
@@ -212,7 +264,7 @@ class ResultLogger:
         with closing(self._conn.cursor()) as cur:
             cur.execute("DELETE FROM track_summaries WHERE session = ?", (session,))
             n = cur.rowcount
-        self._conn.commit()
+        self._commit()
         return n
 
     def close_session(self, session: str) -> dict[str, int]:
@@ -229,7 +281,7 @@ class ResultLogger:
             cal = cur.rowcount
             cur.execute("DELETE FROM run_stats WHERE session = ?", (session,))
             cur.execute("DELETE FROM ground_truth WHERE session = ?", (session,))
-        self._conn.commit()
+        self._commit()
         return {"events": ev, "summaries": su, "points": pts,
                 "calibrations": cal}
 
@@ -254,19 +306,24 @@ class ResultLogger:
              else float(point["direction_deg"]))
             for point in points
         ]
-        with self._conn:                        # commit, or full rollback
+        try:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO track_points"
                 " (session, track_id, frame_idx, ts_s, x, y, level,"
                 "  speed_px_s, direction_deg)"
                 " VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        except BaseException:
+            if not self._transaction_depth:
+                self._conn.rollback()
+            raise
+        self._commit()
         return len(rows)
 
     def clear_session_points(self, session: str) -> int:
         with closing(self._conn.cursor()) as cur:
             cur.execute("DELETE FROM track_points WHERE session = ?", (session,))
             n = cur.rowcount
-        self._conn.commit()
+        self._commit()
         return n
 
     def session_points(self, session: str,
@@ -292,24 +349,28 @@ class ResultLogger:
             {"calibration": snapshot["calibration"],
              "parameters": snapshot.get("parameters") or {}},
             sort_keys=True, allow_nan=False)
-        with self._conn:                        # commit, or full rollback
-            self._conn.execute(
-                "INSERT OR REPLACE INTO calibration_snapshots"
-                " (session, schema_version, captured_ts, payload)"
-                " VALUES (?,?,?,?)",
-                (session, int(snapshot["schema_version"]),
-                 str(snapshot["captured_ts"]), payload))
+        self._conn.execute(
+            "INSERT OR REPLACE INTO calibration_snapshots"
+            " (session, schema_version, captured_ts, payload)"
+            " VALUES (?,?,?,?)",
+            (session, int(snapshot["schema_version"]),
+             str(snapshot["captured_ts"]), payload))
+        self._commit()
 
     def clear_session_calibration(self, session: str) -> int:
         with closing(self._conn.cursor()) as cur:
             cur.execute("DELETE FROM calibration_snapshots WHERE session = ?",
                         (session,))
             n = cur.rowcount
-        self._conn.commit()
+        self._commit()
         return n
 
     def get_calibration(self, session: str) -> dict | None:
-        """Stored snapshot, or None when absent/unreadable (never guessed)."""
+        """Stored snapshot, or None when absent/unreadable (never guessed).
+
+        Uses the same central validator as the API repository so both read
+        paths accept and reject exactly the same persisted documents.
+        """
         with closing(self._conn.cursor()) as cur:
             row = cur.execute(
                 "SELECT schema_version, captured_ts, payload"
@@ -317,22 +378,12 @@ class ResultLogger:
                 (session,)).fetchone()
         if row is None:
             return None
-        try:
-            version = int(row[0])
-        except (TypeError, ValueError):
+        version, problem = snapshot_version(row[0])
+        if problem is not None:
             return None
-        if version not in SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS:
-            return None
-        try:
-            payload = json.loads(row[2])
-        except (TypeError, ValueError):
-            return None
-        if not isinstance(payload, dict) or not isinstance(
-                payload.get("calibration"), dict):
-            return None
-        return {"schema_version": version, "captured_ts": row[1],
-                "calibration": payload["calibration"],
-                "parameters": payload.get("parameters") or {}}
+        snapshot, problem = decode_calibration_snapshot(
+            row[2], version, row[1])
+        return None if problem is not None else snapshot
 
     # --------------------------------------------------------- run stats
     def log_run(self, info: dict) -> None:
@@ -347,7 +398,7 @@ class ResultLogger:
                  info.get("width"), info.get("height"), info.get("fps"),
                  info.get("wall_s"), info.get("max_frames"),
                  info.get("started_ts"), info.get("ended_ts")))
-        self._conn.commit()
+        self._commit()
 
     def get_run(self, session: str) -> dict | None:
         with closing(self._conn.cursor()) as cur:
@@ -386,9 +437,10 @@ class ResultLogger:
 
     def session_summaries(self, session: str) -> tuple[list[str], list[tuple]]:
         with closing(self._conn.cursor()) as cur:
-            cur.execute("SELECT track_id, color, shape, n_points, n_seconds,"
-                        " mean_speed_px_s, max_speed_px_s, path_length_px,"
-                        " straightness, directions, first_frame, last_frame"
+            cur.execute("SELECT track_id, color, shape, class_name, n_points,"
+                        " n_seconds, mean_speed_px_s, max_speed_px_s,"
+                        " path_length_px, straightness, directions,"
+                        " first_frame, last_frame"
                         " FROM track_summaries WHERE session = ?"
                         " ORDER BY track_id", (session,))
             cols = [d[0] for d in cur.description]
@@ -396,20 +448,22 @@ class ResultLogger:
 
     # --------------------------------------------------------- summaries
     def log_track_summary(self, stats, color: str | None, shape: str,
-                          first_frame: int, last_frame: int) -> None:
+                          first_frame: int, last_frame: int,
+                          class_name: str | None = None) -> None:
         with closing(self._conn.cursor()) as cur:
             cur.execute(
                 "INSERT OR REPLACE INTO track_summaries"
-                " (track_id, session, color, shape, n_points, n_seconds,"
-                "  mean_speed_px_s, max_speed_px_s, path_length_px, straightness,"
-                "  directions, first_frame, last_frame)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (stats.track_id, self.session, color, shape, stats.n_points,
+                " (track_id, session, color, shape, class_name, n_points,"
+                "  n_seconds, mean_speed_px_s, max_speed_px_s, path_length_px,"
+                "  straightness, directions, first_frame, last_frame)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (stats.track_id, self.session, color, shape, class_name,
+                 stats.n_points,
                  round(stats.n_seconds, 3), round(stats.mean_speed_px_s, 2),
                  round(stats.max_speed_px_s, 2), round(stats.path_length_px, 2),
                  round(stats.straightness, 4), ",".join(stats.direction_hist),
                  first_frame, last_frame))
-        self._conn.commit()
+        self._commit()
 
     # ------------------------------------------------------------ queries
     def counts_by_level(self) -> dict[str, int]:

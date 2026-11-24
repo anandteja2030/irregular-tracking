@@ -3,8 +3,8 @@
 A real Python computer-vision project (no website-only mockup): it *sees and
 tracks* coloured objects on a webcam or video file, *learns* per-object and
 scene behaviour, and *explains* what is unusual about any object, in words, on
-a live annotated view and a Streamlit dashboard. All detections/verdicts are
-logged to SQLite and exportable as CSV.
+a live annotated view, API service and React console. All detections/verdicts
+are logged to SQLite and exportable as CSV.
 
 ## What it does (objectives → modules)
 
@@ -13,16 +13,15 @@ logged to SQLite and exportable as CSV.
 | 1. SEE & TRACK — video input, preprocessing, HSV colour detection, contour shape detection, tracking | `src/video/video_input.py`, `src/video/preprocessing.py`, `src/video/detection.py` |
 | 1. tracking — Kalman constant-velocity filter, Hungarian assignment, unique IDs, trajectory history | `src/tracking/kalman.py`, `src/tracking/track_manager.py` |
 | 2. LEARN & ANALYZE — speed/direction/acceleration features, self-calibration, per-object + scene-relative comparison | `src/analysis/features.py`, `src/analysis/calibration.py` |
-| 3. DETECT, EXPLAIN & SHOW — rules, Isolation Forest, signal fusion, Normal/Suspicious/Irregular, explanations, OpenCV visualization, logging, dashboard | `src/anomaly/rules.py`, `src/anomaly/isolation.py`, `src/anomaly/fusion.py`, `src/ui/visualization.py`, `src/analysis/logger.py`, `src/pipeline.py`, `src/ui/dashboard.py` |
+| 3. DETECT, EXPLAIN & SHOW — rules, Isolation Forest, signal fusion, Normal/Suspicious/Irregular, explanations, OpenCV visualization, logging, API/console | `src/anomaly/rules.py`, `src/anomaly/isolation.py`, `src/anomaly/fusion.py`, `src/ui/visualization.py`, `src/analysis/logger.py`, `src/pipeline.py`, `src/api/`, `frontend/` |
 
 Everything is parameterised from one file: `config/config.py` (HSV ranges,
 tracking gates, rules/ML weights, calibration warm-up).
 
 ## NEURAL COMMAND API + React console
 
-The Streamlit dashboard below is still the reference desktop UI. This section
-documents the FastAPI service and the React console that wrap the same engine,
-and it is the authoritative setup guide for that stack.
+This section documents the FastAPI service and the React console that wrap the
+same engine, and it is the authoritative setup guide for that stack.
 
 ### Architecture
 
@@ -49,8 +48,8 @@ Engine — unchanged: src/video → src/tracking → src/analysis → src/anomal
 
 One analysis run decodes frames, tracks them, scores every observation
 (calibrated rules + Isolation Forest + scene-relative), and persists the rows
-under its own session id. Completed API jobs, saved Streamlit sessions and CLI
-runs all store their observation centroids in `track_points` and a versioned
+under its own session id. Completed API jobs and CLI runs all store their
+observation centroids in `track_points` and a versioned
 calibration snapshot in `calibration_snapshots`. SQLite is the durable source
 of truth for those persisted values. For the current API process, preview
 frames, structured rule evidence, and in-process copies of trajectories and
@@ -69,7 +68,7 @@ the SQLite rows remain readable.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt       # engine, Streamlit, pytest
+.venv/bin/pip install -r requirements.txt       # engine, pytest
 .venv/bin/pip install -r requirements-api.txt   # FastAPI, uvicorn, httpx
 .venv/bin/python scripts/generate_samples.py    # writes samples/*.mp4
 ```
@@ -92,8 +91,8 @@ on first use.
 | `calibration_snapshots` | one versioned JSON snapshot per session: calibration status, speed/direction baseline, captured timestamp and calibration parameters |
 | `ground_truth` | per-observation labels (`Normal`/`Anomaly`); empty until labels are written |
 
-To start from a clean store, stop the API and Streamlit, move
-`data/app_data.db` aside, and let the next run recreate it. Never edit rows by
+To start from a clean store, stop the API, move `data/app_data.db` aside, and
+let the next run recreate it. Never edit rows by
 hand while a job is running.
 
 ### Backend startup
@@ -160,11 +159,80 @@ process-local and reset on restart, which `/system` reports explicitly.
 6. Exports: `/sessions/{id}/export/csv?dataset=events|tracks` and
    `/sessions/{id}/report` (markdown, `?download=true` for attachment).
 
+### Live webcam tracking
+
+The console's Video Studio opens with two inputs: **upload a video** and **live
+webcam tracking**. Live tracking runs the same `TrackingPipeline` as a file
+run, one captured frame at a time, and turning it into a session is explicit:
+
+1. `POST /api/v1/live/sessions` reserves a live id (at most **4** concurrent
+   captures; an idle capture expires after 3 minutes).
+2. The browser captures the webcam with `getUserMedia`, downscales each frame
+   to at most 1280 px wide, and posts it as `multipart/form-data` to
+   `POST /api/v1/live/sessions/{live_id}/frames` (4 MiB per frame).
+3. Every response is that frame's real pipeline output: `track_id`, pixel
+   `box`, `centroid`, the recent measured `trail`, `level`, the four scores,
+   speed, heading, triggered rules and the human-readable `why`. The console
+   draws each box with corner brackets, the measured path and a heading arrow
+   over its own video, and lists every object with its score channels, mini
+   path and reason. Nothing in the overlay is synthetic.
+
+Live sessions add moving-foreground detection (a running background estimate)
+before the tracker, so grey, dark or low-saturation objects are followed while
+they move; the colour mask still finds saturated shapes that are stationary.
+File runs keep the calibrated colour path unchanged, and both paths feed the
+same tracker, calibration, fusion and explanation code — only detection
+coverage differs, never the judgement.
+4. `POST /api/v1/live/sessions/{live_id}/stop` builds a normal session from
+   the captured frames (observations, track summaries, calibration snapshot and
+   annotated preview frames) and persists it in SQLite. It then behaves like
+   any other session: overview, tracks, anomalies, scene, evaluation, media and
+   the markdown report all read it (its `source.kind` is `live`).
+5. `POST /api/v1/live/sessions/{live_id}/cancel` discards a capture without
+   writing anything.
+
+Frames are captured only after the previous one has been scored, so a slow
+round trip lowers the rate instead of queueing or dropping frames; the HUD
+shows the measured rate. A capture is capped at 18,000 frames (~25 min at
+12 fps). Camera access needs `https` or `localhost` in the browser.
+
+### Design choices against the usual limitations
+
+| Typical limitation | What this engine does instead |
+| --- | --- |
+| Fixed thresholds that do not travel between scenes | Speed, direction and fusion bands are learned per run by the calibrator; `/scene` exposes the baseline and its readiness. |
+| Objects judged only against themselves | A scene-relative score compares each object with surrounding flow, and fusion weights all three channels. |
+| Requires a labelled anomaly dataset | Isolation Forest plus statistical rules are unsupervised; labels are only used by the read-only evaluation surface. |
+| Scores without a reason | Every observation carries triggered rules, an ML note, a scene note and a human-readable `why`. |
+| Heavy deep models on modest hardware | Classical OpenCV detection, Kalman/Hungarian tracking and scikit-learn, no GPU requirement. |
+| Normal behaviour must be defined by hand | Calibration starts automatically and keeps updating; zones and weights are optional overrides. |
+| Detection limited to saturated colour blobs | Live captures add MOG2 moving-foreground detection; duplicate detections of one object are suppressed before tracking. |
+
+### Reading the dashboard
+
+Each surface states what it measures instead of only printing numbers:
+
+- **Command Overview** shows the selected run's outcome ring, Normal/elevated
+  shares, object leaders and a comparable elevated-share bar for every session.
+- **Track Explorer** adds an object map (peak speed × peak fused score, colour
+  = worst level), a per-object score ranking, the measured trajectory canvas,
+  speed/heading series and frame investigation.
+- **Anomaly Center** pairs the severity distribution with a fused-score
+  histogram, a Suspicious/Irregular ring, channel contributions and a time
+  timeline.
+- **Scene Intelligence** draws the learned speed envelope, direction rose,
+  spatial density and retained object paths.
+- **Evaluation & Reports** adds a rate comparison bar beside the confusion
+  matrix and the exported report.
+
+Charts are dependency-free SVG built from persisted rows. A missing value
+breaks a line or leaves a bar empty; it is never drawn as zero.
+
 ### Current API/console limitations
 
 - **Trajectories are persisted.** Every observation's real centroid is written
   to the indexed `track_points` table when a session completes, including CLI
-  and Streamlit-saved runs, so historical sessions return the same paths after
+  runs, so historical sessions return the same paths after
   a restart. Sessions analysed before this storage existed or tracks with no
   observations report an unavailable reason instead of a reconstructed path.
   A CLI execution that fails or is interrupted is not persisted as a completed
@@ -180,14 +248,21 @@ process-local and reset on restart, which `/system` reports explicitly.
   summaries; they simply have no stored trajectory or calibration snapshot
   until they are analysed again.
 - **Ground-truth labels cannot be edited from the console.** The evaluation
-  surface is read-only: the API reports stored labels, but no write endpoint or
-  UI exists yet (the Streamlit Evaluation page can still write labels).
+  surface is read-only: the API reports stored labels, but no write endpoint
+  exists yet.
 - **No annotated video is produced or downloadable.** Only decimated preview
   frames (JPEG, every 6th frame, max 240) are retained, for the most recent
   four sessions in memory.
 - **Jobs and preview artifacts are lost on restart.** Persisted sessions, tracks,
   events and exports remain readable; the API says why media is unavailable
   instead of substituting other data.
+- **Live captures are process-local until stopped.** An in-progress capture
+  exists only in the API process that is scoring it; stopping writes it to
+  SQLite. A restart therefore drops an unfinished capture, not a saved one.
+- **The detector stays colour/saturation based.** It tracks saturated shapes and
+  bright, high-saturation objects; low-contrast grey objects can be missed. The
+  live panel states this rather than promising error-free detection, and the
+  camera's measured fps and per-frame levels are reported as recorded.
 
 ## Quick start (local machine with a webcam)
 
@@ -203,49 +278,46 @@ python3 -m venv .venv
 
 # 3. run the pipeline on a sample video from the CLI
 .venv/bin/python -m scripts.run_pipeline samples/anomaly_clip.mp4
-
-# 4. open the dashboard
-.venv/bin/streamlit run src/ui/dashboard.py
 ```
 
 - **Webcam:** pass `0`: `python -m scripts.run_pipeline 0` — requires a real
   camera device; nothing here can verify it from CI.
 - **Supported inputs:** the CLI opens any video OpenCV/ffmpeg can decode (mp4,
-  avi, mov, mkv verified by tests); the dashboard uploader accepts
+  avi, mov, mkv verified by tests); the console uploader accepts
   mp4/avi/mov/mkv.
 - **Invalid input is handled, not crashed on:** an unreadable or missing
   source prints a friendly `error:` + `hint:` message and exits with code 2
-  (CLI), or shows a red error card instead of a traceback (dashboard).
+  (CLI), or shows a friendly error card instead of a traceback (console).
 - Annotated frames + summaries are written under `output/`; SQLite events to
   `data/app_data.db` and CSV exports on demand. A completed CLI run also
   persists its trajectories and calibration snapshot under the session id
   (the source filename, or `webcam`), using the same storage API jobs use.
   Uploaded videos are saved as `output/upload_*` and cleaned up after 24 h.
 
-## Docker (production)
+## Docker (API service)
 
-The image is `python:3.12-slim` + OpenCV system libs + `requirements.txt`,
-runs as a non-root user, exposes 8501 and listens on `$PORT` (default 8501).
-Streamlit runs headless from `.streamlit/config.toml` (address `0.0.0.0`,
-XSRF/CORS protection on, telemetry off, 64 MB upload limit). **No secrets are
-stored in the repo or image** - inject them via your platform's environment.
+The image is `python:3.12-slim` + OpenCV system libs + `requirements.txt` and
+`requirements-api.txt`, runs as a non-root user and exposes 8000 by default.
+It runs the FastAPI service with Uvicorn; the React console is built and served
+separately. **No secrets are stored in the repo or image** - inject them via
+your platform's environment.
 
 ```bash
 # 1. build the image
 docker build -t irregular-tracking:latest .
 
-# 2. run it (host 8501 -> container $PORT, default 8501)
-docker run --rm -p 8501:8501 \
+# 2. run it (host 8000 -> container $PORT, default 8000)
+docker run --rm -p 8000:8000 \
   -v irregular-data:/app/data -v irregular-output:/app/output \
   irregular-tracking:latest
 
-# 3. verify health (endpoint verified on streamlit 1.66.x: 200 + body "ok")
-curl -f http://localhost:8501/_stcore/health && echo " healthy"
+# 3. verify health
+curl -f http://localhost:8000/health && echo " healthy"
 
 # 4. run the test suite inside the image
 docker run --rm irregular-tracking:latest python -m pytest tests -q
 
-# 5. or bring the stack up with Compose (persistent volumes for SQLite logs
+# 5. or bring the service up with Compose (persistent volumes for SQLite logs
 #    and exported artifacts; see docker-compose.yml)
 docker compose up --build -d
 docker compose ps            # STATUS should become "healthy"
@@ -258,10 +330,10 @@ docker compose down          # stop (volumes are kept)
 - **Persistent storage:** named volumes `app-data` -> `/app/data`
   (SQLite `app_data.db`) and `app-output` -> `/app/output` (CSV/frames),
   matching `config/config.py` paths. They survive `docker compose down`.
-- **Health check:** `HEALTHCHECK` polls `/_stcore/health` every 30 s using
-  Python stdlib (no curl needed in the slim image).
-- The image bakes in the sample videos under `samples/` so the dashboard's
-  sample-picker works immediately after deployment.
+- **Health check:** `HEALTHCHECK` polls `/health` every 30 s using Python
+  stdlib (no curl needed in the slim image).
+- The image bakes in the sample videos under `samples/` so the API's sample
+  endpoints work immediately after deployment.
 
 ## Architecture
 
@@ -274,37 +346,20 @@ src/tracking/               Kalman filter (NumPy replication) + TrackManager
                             (Hungarian via scipy, IDs, trajectories)
 src/analysis/               movement features, scenario self-calibration,
                             SQLite/CSV logging, ground truth, evaluation metrics
+src/evaluation/             JSON benchmark annotations, pipeline-output adapter,
+                            IoU matching, detection/tracking/anomaly metrics,
+                            reports
 src/anomaly/                rule engine, Isolation Forest, weighted fusion
-src/ui/                     OpenCV overlay + Streamlit dashboard
-src/ui/session.py           per-run session model (frames, observations,
-                            tracks, scene stats - isolated from history)
-src/ui/pages/               the six dashboard pages (see below)
-src/ui/charts.py            Altair charts built from real session data
+src/ui/visualization.py     OpenCV overlays (boxes, IDs, trails, HUD)
+src/ui/session.py           backward-compatible analysis shim
 src/ui/report.py            markdown session report builder
-src/ui/theme.py             dark theme, layout + shared components
+src/api/                    FastAPI service (system, jobs, sessions, analytics)
+frontend/                   React + TypeScript console
 scripts/generate_samples.py synthetic sample videos
 scripts/run_pipeline.py     CLI entry point
-tests/                      pytest suites per phase (194 tests, incl. API and restart integration)
+scripts/benchmark_pipeline.py    run pipeline + evaluate + manifest
+tests/                      pytest suites per phase (incl. API and restart integration)
 ```
-
-## Dashboard tour (six pages)
-
-`streamlit run src/ui/dashboard.py` opens a multi-page app with a compact
-sidebar (navigation, active session, DB/CLI shortcuts):
-
-| Page | What it shows |
-| --- | --- |
-| **Overview** | KPI cards from the active session, recent alerts, activity timeline, session summary, pipeline capability notes, bundled-sample picker. Complete-looking empty state before any run. |
-| **Video Studio** | The workspace: upload (mp4/avi/mov/mkv) or pick a sample, frame budget, real progress during analysis, then a frame-by-frame viewer with annotated/original toggle, bounding boxes, track IDs, trajectory trails, HUD, timestamps and per-frame level chips. Friendly error cards for corrupt/unsupported input. |
-| **Track Explorer** | Searchable track list, per-track KPIs (duration, observations, mean/max speed, path length, straightness, events), trajectory plot, speed-over-time with mean reference, direction mix, event history table, per-track CSV export. |
-| **Anomaly Center** | Filterable/searchable event table + timeline; selecting an event shows its timestamp, track, severity, fused/rule/ML/scene score breakdown, triggered rules, evidence frame and the human-readable explanation. Rule-based evidence is visually separated from Isolation-Forest output. |
-| **Scene Intelligence** | Learned baseline (speed percentiles, dominant flow, calibration sample count/status), speed distribution vs baseline, per-track deviation, a working restricted-zone editor with dwell evidence, and honest limitation notes. |
-| **Evaluation & Reports** | Measured processing stats; ground-truth labelling per track → precision/recall/F1/FPR/accuracy + confusion matrix **only when both classes are labelled** (single-class runs say so instead of faking numbers); markdown session report, CSV/JSON exports, and stored-session history (save/load/delete, isolated per session). |
-
-Every chart, counter and table reads the active session's real observations —
-nothing is generated for display. Synthetic bundled samples are labelled as
-synthetic. Webcam capture is intentionally CLI-only (a deployed Streamlit
-server has no camera attached).
 
 ## Anomaly reasoning — how each verdict is produced
 
@@ -331,9 +386,103 @@ tracks, ≥12 s observed, ≥30 movement samples): speed p10/p50/p90, std, and a
 ML/scene streams stay quiet; after it, rules and scene-relative scoring switch
 on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 
+## Ground-truth evaluation (Phase 15)
+
+`src/evaluation/` is a file-based benchmark for the existing detector and
+tracker. It does not alter the API observation labels or the SQLite schema. Ground truth is object-centric; predictions are frame-centric:
+
+```json
+{
+  "schema_version": 1,
+  "videos": [{
+    "video_id": "clip-a",
+    "objects": [{
+      "object_id": "pedestrian-1",
+      "label": "Anomaly",
+      "category": "loitering",
+      "frames": [{"frame_idx": 0, "bbox": [10, 20, 30, 40]}],
+      "trajectory": [{"frame_idx": 0, "x": 25, "y": 40}]
+    }]
+  }]
+}
+```
+
+Predictions use `videos[].frames[].objects[]` with `track_id`, `bbox`, `level`
+(`Normal`, `Suspicious` or `Irregular`; the binary alias `Anomaly` is also
+accepted) and optional `category`. Boxes are pixel `[x, y, width, height]`,
+matching the detector. Full schema and validation live in
+`src/evaluation/annotations.py`.
+
+Evaluation matches one-to-one per video/frame using IoU >= **0.5** by default;
+candidates are greedy-sorted by descending IoU and then stable IDs. GT objects
+matched to changing predicted track IDs across consecutive visible frames
+contribute ID switches; a gap breaks the comparison. Detection precision,
+recall and F1 come from matched/unmatched boxes. Anomaly precision, recall,
+F1, false-positive rate and the 2x2 confusion matrix are end-to-end over all GT
+object-frames: missed anomalies are false negatives and unmatched positive
+predictions are false positives. Category confusion is computed where a GT
+anomaly was predicted positive and carries a category. Track continuity is
+matched GT observations divided by all GT observations; fragmented,
+mostly-tracked and mean-coverage figures are also reported. Trajectory points
+are validated and preserved for provenance, but tracking metrics use the
+per-frame boxes rather than a trajectory-similarity score.
+
+Existing pipeline frame results can be converted without running a second
+detector. `FrameResult.entries` carry the tracker's `track_id`, centroid,
+`bbox_wh` and level; the adapter converts the box to `[x, y, width, height]`
+and includes every entry the pipeline reports (no extra filtering):
+
+```python
+from src.evaluation import frames_to_predictions, write_predictions
+
+# Collect the FrameResult objects already returned by the pipeline, e.g.
+# run_analysis(..., on_frame=lambda frame, fps: frames.append(frame)).
+frames = []
+predictions = frames_to_predictions("clip-a", frames)
+write_predictions(predictions, "predictions.json")
+```
+
+### End-to-end benchmark runner
+
+`scripts/benchmark_pipeline.py` runs the existing pipeline with its
+`on_frame` hook, adapts every returned `FrameResult`, evaluates the result
+against ground truth, and writes the prediction JSON, evaluation JSON,
+Markdown report and a reproducibility manifest. It does not persist a
+session to SQLite and does not change the detector or API.
+
+```bash
+.venv/bin/python -m scripts.benchmark_pipeline \
+  --source samples/anomaly_clip.mp4 \
+  --ground-truth annotations.json \
+  --video-id anomaly_clip \
+  --iou-threshold 0.5 \
+  --predictions benchmark_predictions.json \
+  --output-json benchmark_evaluation.json \
+  --output-report benchmark_report.md \
+  --manifest benchmark_manifest.json
+```
+
+The manifest records the source and ground-truth SHA-256 hashes, source/frame
+metadata, runtime config values and config-file hash, IoU threshold, matching
+policy, Python version, and Git commit/branch/dirty state. Use
+`--max-frames` for a quick bounded run.
+
+To evaluate predictions that already exist without rerunning the pipeline:
+
+```bash
+.venv/bin/python -m scripts.evaluate_predictions \
+  --ground-truth annotations.json --predictions predictions.json \
+  --iou-threshold 0.5 --output-json evaluation.json --output-report evaluation.md
+```
+
+The result JSON is machine-readable and includes per-video and aggregate
+metrics plus the matching policy; the Markdown report records the same scope
+and limitations. The existing per-session evaluation and API remain unchanged,
+and the baseline detector is not replaced.
+
 ## What is verified vs what is not
 
-**Verified by the test suite (194 tests, all passing):**
+**Verified by the backend test suite:**
 - video-input contract, preprocessing purity/cleanup, HSV masks incl. red
   wrap-around, shape classification, area filters
 - Kalman constant-velocity convergence, noisy-measurement smoothing,
@@ -349,34 +498,27 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 - **end-to-end on real video files** generated by `scripts/generate_samples.py`:
   normal clip calibrates and tracks; anomaly clip yields non-Normal verdicts
   with explanations; noise clip runs clean; logger writes DB/CSV
-- **the dashboard itself** via `streamlit.testing.v1.AppTest`: all six pages
-  navigate and render (empty states before a run, no exceptions), Video Studio
-  analysis produces a session with evidence rows, a corrupt source shows a
-  friendly error card — not a traceback, anomaly filtering and event
-  investigation work, track search filters, the zone editor round-trips,
-  evaluation reports real metrics and an honest single-class fallback, session
-  save/history round-trips, and reports disclose measured values only. The real
-  server was also started (`streamlit run ...`) and served in a headless
-  Chromium: all pages captured with zero console errors.
 - **ground truth & metrics:** precision/recall/F1/FPR/accuracy against known
   values, rejection of single-class/empty labels, unlabelled-count accounting,
   ground-truth CSV round-trip and validation.
+- **Phase 15 benchmark framework:** annotation/prediction validation, IoU
+  matching, detection/tracking/anomaly aggregation, pipeline-result adapter,
+  end-to-end runner outputs, and manifest/config/hash metadata.
 - **CLI contract:** unreadable/missing sources exit with code 2 and a friendly
   message (no traceback); mp4 and avi inputs both run end-to-end; re-running
   the same source **replaces** its rows instead of appending a duplicate copy
   of every observation, and each run records `run_stats` (frames, resolution,
-  wall time, synthetic flag) for the dashboard's history panel.
+  wall time, synthetic flag) for the console's history view.
 - **longer videos:** a 1800-frame (60 s) clip processed at ~18 fps with a
-  ~277 MB peak RSS (memory stays bounded; dashboard previews are capped and
+  ~277 MB peak RSS (memory stays bounded; preview frames are capped and
   downscaled).
 
 **Not verified here (requires hardware or a browser):**
 - **Webcam playback** `VideoSource(src=0)` is implemented via cv2 but cannot
   be exercised from this environment - run it on a machine with a camera.
-- **Browser-only dashboard interactions:** dragging the frame-preview slider
-  and the actual file-upload widget in a real browser (the upload *code path*
-  is covered by tests through source resolution, sanitization and error
-  handling; AppTest cannot drive the uploader widget itself).
+- **Browser-only console interactions:** the actual file-upload widget and
+  drag interactions in a real browser (the upload *code path* is covered by
+  tests through source resolution, sanitization and error handling).
 - My colour ranges are tuned for saturated shapes on dark backgrounds
   (like the samples); real footage needs `config/config.py` range tuning.
 
@@ -391,9 +533,14 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
   birth keep human-readable context. This is documented, not hidden.
 - Positions/velocities are in pixels and px/s; adding a homography for
   real-world m/s would be a natural next step.
-- Dashboard previews keep every ~6th frame, downscaled to 640 px wide, and
-  the frame budget slider caps a run at 1200 frames — this keeps the cached
-  payload small on long videos instead of loading them fully into memory.
+- API previews keep every ~6th frame, downscaled to 640 px wide, and the
+  frame budget caps a run at 1200 frames — this keeps the cached payload small
+  on long videos instead of loading them fully into memory. A live capture
+  keeps the same stride and preview cap.
+- A live capture is scored at whatever rate the browser and network allow
+  (typically a few frames per second through a remote tunnel, much faster on a
+  local machine); `fps` is measured from real frame arrivals, and speeds are
+  derived from it.
 - `sudden_acceleration` fires on the synthetic samples' loop seam (a clip
   built by repeating another video teleports objects back to the start);
   real footage has no such seam.
@@ -403,14 +550,13 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 | Symptom | Cause / fix |
 | --- | --- |
 | `error: cannot read source ...` (exit 2) | File missing, empty, or not a video. Regenerate samples: `.venv/bin/python scripts/generate_samples.py`. |
-| Dashboard says *No sample videos found* | `samples/` is empty — run `scripts/generate_samples.py` or upload a file. |
-| *Could not open ...* error card in the dashboard | Corrupt/unsupported upload. Use mp4/avi/mov/mkv re-encoded from the source. |
+| Console says *No sample videos found* | `samples/` is empty — run `scripts/generate_samples.py` or upload a file. |
+| *Could not open ...* error card in the console | Corrupt/unsupported upload. Use mp4/avi/mov/mkv re-encoded from the source. |
 | Webcam: `cannot read source '0'` | No camera attached (SSH/VM/container), or the camera is held by another process. Expected in Docker/CI — run the webcam on the host machine. |
-| `Address already in use` when starting Streamlit | Another process holds 8501: `streamlit run src/ui/dashboard.py --server.port 8502`. |
-| Counts differ between CLI and dashboard | They process different frame budgets — the dashboard slider caps frames (default 450); set it to the full length for a like-for-like run. |
+| `Address already in use` when starting the API | Another process holds 8000: start Uvicorn on another port and point `NEURAL_API_URL` at it. |
 | Suspicious rows on an otherwise normal video | The fusion is deliberately sensitive: Suspicious (≥0.35) is a soft flag; check the *Irregular* count and the per-row `why` text to judge. |
 | `ModuleNotFoundError: No module named 'config'` | Launching from an odd directory is handled by a path bootstrap — if you still see it, run from the project root or use `.venv/bin/python -m scripts.run_pipeline ...`. |
-| Slow long videos | Lower the frame-budget slider; processing is ~18 fps at 720p on a modest CPU. |
+| Slow long videos | Processing is ~18 fps at 720p on a modest CPU; use a shorter clip or lower resolution. |
 | Console shows "service unreachable" | Start the API on `127.0.0.1:8000` (or set `NEURAL_API_URL` / `VITE_API_BASE_URL`); `GET /health` must answer before the console can load data. |
 | Console loads but previews are 404 | Preview frames are in-process only: restarting the API drops them for old sessions, and the response says so. Re-run the analysis to regenerate them. |
 | Job disappeared after a restart | The job registry is in memory. The persisted session is still listed and fully readable; start the analysis again if you need a live job. |
@@ -419,7 +565,7 @@ on (`SceneStats.ready`), so behaviour is judged relative to the actual scene.
 ## Testing
 
 ```bash
-# backend: engine, dashboard, and the FastAPI integration suite
+# backend: engine and the FastAPI integration suite
 .venv/bin/python -m pytest tests -q
 
 # frontend: types, unit tests, production build

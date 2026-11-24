@@ -242,6 +242,111 @@ export function zoneActivity(events: AnomalyItem[]): ZoneActivityRow[] {
     .sort((a, b) => b.events - a.events || a.zone.localeCompare(b.zone));
 }
 
+export interface RegionEvidenceRow {
+  key: string;
+  label: string;
+  /** Short grid position, e.g. "R1 C2". */
+  code: string;
+  points: number;
+  tracks: number;
+  elevated: number;
+  /** Sum of measured time in this region across tracks, or null without fps. */
+  dwellS: number | null;
+  firstElevatedFrame: number | null;
+}
+
+const REGION_COLUMNS = ["left", "centre", "right"] as const;
+const REGION_ROWS = ["top", "middle", "bottom"] as const;
+
+function regionIndex(value: number, size: number): 0 | 1 | 2 {
+  if (!Number.isFinite(value) || size <= 0) return 1;
+  return Math.min(2, Math.max(0, Math.floor((value / size) * 3))) as 0 | 1 | 2;
+}
+
+/** Measured frame-region activity from retained trajectory points.
+ *
+ * This is the honest fallback when no monitored zone is configured: the frame
+ * is split into thirds and each retained centroid is counted where it was
+ * actually measured. Dwell is the frame span a track spent in that region
+ * divided by fps, never a reconstructed path.
+ */
+export function regionEvidence(
+  tracks: { trackId: number; points: TrajectoryPoint[] }[],
+  width: number,
+  height: number,
+  fps: number | null,
+): RegionEvidenceRow[] {
+  const rows = new Map<
+    string,
+    {
+      label: string;
+      code: string;
+      points: number;
+      tracks: Set<number>;
+      elevated: number;
+      seconds: number;
+      firstElevatedFrame: number | null;
+    }
+  >();
+
+  for (const track of tracks) {
+    const byRegion = new Map<string, { frames: number[]; elevated: boolean }>();
+    for (const point of track.points) {
+      if (point.x === null || point.y === null) continue;
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+      const column = regionIndex(point.x, width);
+      const row = regionIndex(point.y, height);
+      const key = `${row}-${column}`;
+      const current = byRegion.get(key) ?? { frames: [], elevated: false };
+      current.frames.push(point.frame);
+      if (point.level !== null && point.level !== "Normal") current.elevated = true;
+      byRegion.set(key, current);
+    }
+
+    for (const [key, value] of byRegion) {
+      const [row, column] = key.split("-").map(Number) as [0 | 1 | 2, 0 | 1 | 2];
+      const label = `${REGION_ROWS[row][0].toUpperCase()}${REGION_ROWS[row].slice(1)} ${
+        REGION_COLUMNS[column]
+      }`;
+      const current = rows.get(key) ?? {
+        label,
+        code: `R${row + 1} C${column + 1}`,
+        points: 0,
+        tracks: new Set<number>(),
+        elevated: 0,
+        seconds: 0,
+        firstElevatedFrame: null,
+      };
+      current.points += value.frames.length;
+      current.tracks.add(track.trackId);
+      const frames = value.frames;
+      const span = Math.max(...frames) - Math.min(...frames) + 1;
+      if (fps && fps > 0) current.seconds += span / fps;
+      if (value.elevated) {
+        current.elevated += frames.length;
+        const first = Math.min(...frames);
+        if (current.firstElevatedFrame === null || first < current.firstElevatedFrame) {
+          current.firstElevatedFrame = first;
+        }
+      }
+      rows.set(key, current);
+    }
+  }
+
+  return [...rows.values()]
+    .map((value) => ({
+      key: value.code,
+      label: value.label,
+      code: value.code,
+      points: value.points,
+      tracks: value.tracks.size,
+      elevated: value.elevated,
+      dwellS: fps && fps > 0 ? value.seconds : null,
+      firstElevatedFrame: value.firstElevatedFrame,
+    }))
+    .sort((a, b) => b.points - a.points || a.code.localeCompare(b.code));
+}
+
 export interface SpatialPoint {
   trackId: number;
   frame: number;

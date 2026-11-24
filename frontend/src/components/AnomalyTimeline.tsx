@@ -201,20 +201,14 @@ export function AnomalyTimeline({
                 <span className="mono">T{String(selected.track_id).padStart(2, "0")}</span>
               </>
             ) : (
-              <span className="hint hint--flush">
-                Select a severity mark or a frequency bucket to open its persisted event.
-              </span>
+              <span className="hint hint--flush">Select a mark to open its event.</span>
             )}
           </div>
-          <p className="hint hint--flush">
-            Marks use recorded frame numbers; buckets divide the session's real frame span
-            evenly. The UTC stamps are the persisted observation timestamps, while the seconds
-            span is derived from frames and the recorded fps; no event or missing position is
-            interpolated.
-            {truncated
-              ? ` This view plots ${formatNumber(events.length)} of ${formatNumber(totalEvents)} reported events.`
-              : ""}
-          </p>
+          {truncated ? (
+            <p className="hint hint--flush">
+              Plotted {formatNumber(events.length)} of {formatNumber(totalEvents)} events.
+            </p>
+          ) : null}
         </div>
       )}
     </Panel>

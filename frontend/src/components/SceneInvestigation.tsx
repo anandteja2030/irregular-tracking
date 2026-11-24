@@ -3,7 +3,8 @@ import type { ResourceState } from "../hooks/useResource";
 import type { SceneResponse, TrackList } from "../lib/types";
 import { sceneScoredEvents, type LoadedSceneEvents } from "../lib/scene";
 import { formatNumber } from "../lib/format";
-import { formatTrackId } from "../lib/tracks";
+import { classLabel, formatTrackId } from "../lib/tracks";
+import { LEVEL_COLOURS, BarList, StackedLevelBar } from "./charts";
 import { LevelBadge } from "./SessionBits";
 import { MetricCard, MetricGrid } from "./MetricCard";
 import { Panel } from "./Panel";
@@ -42,6 +43,21 @@ export function SceneInvestigation({
   const topEvents = scoredEvents.slice(0, 8);
   const positiveTracks = deviations.top_tracks.filter((track) => track.max_scene_score > 0);
   const eventTotal = events.data?.rows.length ?? 0;
+  const trackById = new Map(
+    (tracks.data?.tracks ?? []).map((track) => [track.track_id, track]),
+  );
+  const chartRows = positiveTracks.map((track) => {
+    const aggregate = trackById.get(track.track_id);
+    const label = classLabel(aggregate?.appearance ?? { color: null, shape: null });
+    const worst = aggregate?.observed.worst_level ?? null;
+    return {
+      key: `T${track.track_id}`,
+      label: `${formatTrackId(track.track_id)}${label ? ` · ${label}` : ""}`,
+      value: track.max_scene_score,
+      color: worst ? LEVEL_COLOURS[worst] : "var(--chart-2)",
+      hint: `${formatNumber(track.observations)} scored obs.`,
+    };
+  });
 
   return (
     <div className="scene-investigation">
@@ -49,33 +65,28 @@ export function SceneInvestigation({
         <MetricCard
           label="Scene-scored observations"
           value={formatNumber(deviations.scene_score.samples)}
-          hint="persisted per observation"
         />
         <MetricCard
           label="Mean scene score"
           value={formatNumber(deviations.scene_score.mean, 3)}
           meter={deviations.scene_score.mean}
           tone="accent"
-          hint="baseline deviation"
         />
         <MetricCard
           label="Max scene score"
           value={formatNumber(deviations.scene_score.max, 3)}
           meter={deviations.scene_score.max}
           tone="warn"
-          hint="strongest observation"
         />
         <MetricCard
           label="Above 0.20 / 0.30"
           value={`${formatNumber(deviations.above_0_2)} / ${formatNumber(
             deviations.above_0_3,
           )}`}
-          hint="observation counts"
         />
         <MetricCard
           label="Affected tracks"
           value={formatNumber(deviations.affected_tracks)}
-          hint="track-level attribution"
           tone="bad"
         />
       </MetricGrid>
@@ -145,18 +156,6 @@ export function SceneInvestigation({
                   </Link>
                 ))}
               </div>
-              <div className="panel__pad panel__pad--tight">
-                <p className="hint hint--flush">
-                  {formatNumber(scoredEvents.length)} of {formatNumber(eventTotal)} loaded
-                  elevated events carry a positive scene score. Opening one preserves its
-                  event, track and evidence context.
-                  {events.data?.truncated
-                    ? ` Only ${formatNumber(eventTotal)} of ${formatNumber(
-                        events.data.total,
-                      )} reported events are loaded.`
-                    : ""}
-                </p>
-              </div>
             </>
           ) : (
             <div className="panel__pad">
@@ -195,12 +194,27 @@ export function SceneInvestigation({
             </div>
           ) : positiveTracks.length > 0 ? (
             <>
+              <div className="panel__pad scene-track-chart">
+                <BarList
+                  rows={chartRows}
+                  max={1}
+                  formatValue={(value) => value.toFixed(2)}
+                  ariaLabel="Maximum scene deviation score per object"
+                />
+              </div>
               <div className="scene-track-list">
                 {positiveTracks.map((track) => {
-                  const aggregate = tracks.data?.tracks.find(
-                    (candidate) => candidate.track_id === track.track_id,
-                  );
+                  const aggregate = trackById.get(track.track_id);
                   const worst = aggregate?.observed.worst_level ?? null;
+                  const label = classLabel(
+                    aggregate?.appearance ?? { color: null, shape: null },
+                  );
+                  const observations = aggregate?.observed.observations ?? null;
+                  const elevated = aggregate?.observed.anomalies ?? null;
+                  const share =
+                    observations && elevated !== null
+                      ? ((elevated / Math.max(observations, 1)) * 100).toFixed(1)
+                      : null;
                   return (
                     <Link
                       className={`scene-track-row ${
@@ -213,14 +227,28 @@ export function SceneInvestigation({
                         <TrackIcon width={13} height={13} />
                       </span>
                       <span className="scene-track-row__body">
-                        <span className="mono">{formatTrackId(track.track_id)}</span>
-                        <span className="scene-track-row__meta">
-                          {aggregate
-                            ? `${formatNumber(aggregate.observed.anomalies)} elevated · ${formatNumber(
-                                aggregate.observed.observations,
-                              )} observations`
-                            : `${formatNumber(track.observations)} scene-scored observations`}
+                        <span className="scene-track-row__head">
+                          <span className="mono">{formatTrackId(track.track_id)}</span>
+                          {label && <span className="scene-track-row__class">{label}</span>}
                         </span>
+                        <span className="scene-track-row__meta">
+                          {aggregate && observations !== null && elevated !== null
+                            ? `${formatNumber(elevated)} elevated of ${formatNumber(
+                                observations,
+                              )} observations (${share}%) · ${
+                                worst === "Normal"
+                                  ? "below the sustained-evidence verdict bar"
+                                  : `verdict ${worst}`
+                              }`
+                            : `${formatNumber(
+                                track.observations,
+                              )} scene-scored observations · verdict level not retained`}
+                        </span>
+                        {aggregate && (
+                          <span className="scene-track-row__levels">
+                            <StackedLevelBar levels={aggregate.observed.levels} height={6} />
+                          </span>
+                        )}
                       </span>
                       <span className="scene-track-row__score mono">
                         <span className="scene-track-row__meter" aria-hidden="true">
@@ -235,14 +263,6 @@ export function SceneInvestigation({
                     </Link>
                   );
                 })}
-              </div>
-              <div className="panel__pad panel__pad--tight">
-                <p className="hint hint--flush">
-                  Per-track maxima come from the scene endpoint's top {formatNumber(
-                    deviations.top_tracks.length,
-                  )}{" "}
-                  list. A positive score marks deviation from the learned baseline, not a cause.
-                </p>
               </div>
             </>
           ) : (

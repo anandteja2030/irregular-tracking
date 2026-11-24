@@ -3,7 +3,7 @@ import type { ResourceState } from "../hooks/useResource";
 import type { AnomalyDetail, AnomalyItem } from "../lib/types";
 import { anomalyTypeLabel } from "../lib/anomalies";
 import { formatNumber } from "../lib/format";
-import { formatTrackId, formatUtc } from "../lib/tracks";
+import { classLabel, formatTrackId, formatUtc } from "../lib/tracks";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { LevelBadge } from "./SessionBits";
 import { AnomalyIcon, ArrowRightIcon, ImageIcon, TrackIcon } from "./icons";
@@ -123,10 +123,6 @@ function EventBody({
           </div>
         ))}
       </div>
-      <p className="hint hint--flush">
-        Fused, rule, ML and scene values are the persisted scores. The browser does not
-        re-fuse or infer a missing score.
-      </p>
 
       <div className="event-motion">
         <div>
@@ -190,10 +186,7 @@ function EventBody({
             ))}
           </ul>
         ) : (
-          <p className="hint hint--flush">
-            Structured evidence was retained for this event, but no rule trigger was
-            recorded. This is different from evidence that is missing.
-          </p>
+          <p className="hint hint--flush">No rule trigger recorded.</p>
         )}
 
         {evidence.available && (
@@ -220,10 +213,7 @@ function EventBody({
           </div>
         )}
         {retainedNoRules && evidence.ml_note === null && evidence.scene_note === null && (
-          <p className="hint hint--flush">
-            No rule, ML note or scene note was recorded, while the evidence record itself is
-            present.
-          </p>
+          <p className="hint hint--flush">No rule, ML or scene note recorded.</p>
         )}
       </section>
 
@@ -244,7 +234,12 @@ function EventBody({
                 F{event.track.first_frame ?? "—"}–F{event.track.last_frame ?? "—"}
               </span>
               <span>
-                {event.track.color ?? "colour —"} · {event.track.shape ?? "shape —"}
+                {classLabel({
+                  class_name: event.track.class_name,
+                  color: event.track.color,
+                  shape: event.track.shape,
+                }) ??
+                  `${event.track.color ?? "colour —"} · ${event.track.shape ?? "shape —"}`}
               </span>
             </div>
             <Link className="row-link" to={trackUrl(sessionId, event.track.track_id)}>
@@ -254,8 +249,7 @@ function EventBody({
           </>
         ) : (
           <p className="hint hint--flush">
-            The persisted event names track {formatTrackId(event.track_id)}, but no track
-            aggregate was returned for it.
+            No track aggregate for {formatTrackId(event.track_id)}.
           </p>
         )}
       </section>

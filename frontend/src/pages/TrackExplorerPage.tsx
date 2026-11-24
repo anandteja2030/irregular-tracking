@@ -14,9 +14,28 @@ import { TrackAnomalies } from "../components/TrackAnomalies";
 import { TrajectoryCanvas } from "../components/TrajectoryCanvas";
 import { MotionChart } from "../components/MotionChart";
 import { FrameInvestigator } from "../components/FrameInvestigator";
+import { LevelVerdict } from "../components/LevelVerdict";
+import { trackEvidenceSummary } from "../lib/anomalies";
 import { ArrowRightIcon, ImageIcon, TrackIcon } from "../components/icons";
 import { formatNumber } from "../lib/format";
 import {
+  BarList,
+  LEVEL_COLOURS,
+  LEVEL_ORDER,
+  LevelDonut,
+  LevelLegend,
+  ScatterPlot,
+} from "../components/charts";
+import {
+  FleetRoster,
+  LevelPlaybook,
+  ObjectConstellation,
+  QuantumHero,
+  type ConstellationObject,
+} from "../components/quantum";
+import {
+  appearanceLabel,
+  classLabel,
   filterTracks,
   formatTrackId,
   summarizeDirections,
@@ -123,6 +142,7 @@ export function TrackExplorerPage() {
     enabled: Boolean(selectedId),
     key: sessionKey,
   });
+  const config = useResource(api.config);
   const frameIndex = useResource(
     (signal) =>
       api.trackFrames(
@@ -184,6 +204,12 @@ export function TrackExplorerPage() {
     setOffset((current) => (current === next ? current : next));
   }, [focusFrame, motion.data]);
 
+  /** Evidence for the selected object only: these events were fetched for it. */
+  const activeEvidence = useMemo(() => {
+    if (!anomalies.data || activeId === null) return null;
+    return trackEvidenceSummary(anomalies.data.anomalies).get(activeId) ?? undefined;
+  }, [anomalies.data, activeId]);
+
   const pickTrack = (trackId: number) => {
     targetTrack.current = null;
     linkedFrame.current = null;
@@ -204,6 +230,91 @@ export function TrackExplorerPage() {
       });
     }
   };
+
+  const fleetLevels = useMemo(() => {
+    const totals = { Normal: 0, Suspicious: 0, Irregular: 0 };
+    for (const track of visibleTracks) {
+      for (const level of LEVEL_ORDER) totals[level] += track.observed.levels[level] ?? 0;
+    }
+    return totals;
+  }, [visibleTracks]);
+
+  const fleetPoints = useMemo(
+    () =>
+      visibleTracks
+        .filter(
+          (track) =>
+            track.motion.max_speed_px_s !== null && track.motion.max_fused_score !== null,
+        )
+        .map((track) => ({
+          x: track.motion.max_speed_px_s as number,
+          y: track.motion.max_fused_score as number,
+          label: `T${String(track.track_id).padStart(2, "0")} · ${track.observed.worst_level}`,
+          color: LEVEL_COLOURS[track.observed.worst_level],
+          size: Math.min(9, 3.5 + track.observed.observations / 120),
+        })),
+    [visibleTracks],
+  );
+
+  const fleetLeaders = useMemo(
+    () =>
+      [...visibleTracks]
+        .sort((a, b) => b.observed.anomalies - a.observed.anomalies)
+        .slice(0, 6)
+        .map((track) => ({
+          key: String(track.track_id),
+          label: `T${String(track.track_id).padStart(2, "0")} · ${appearanceLabel(track.appearance)}`,
+          value: track.observed.anomalies,
+          color: LEVEL_COLOURS[track.observed.worst_level],
+          hint: `${formatNumber(track.observed.observations)} obs`,
+        })),
+    [visibleTracks],
+  );
+
+  // Every visible object is fetched so the constellation and roster can name
+  // all of them at once. The fan-out is capped; the remainder stay in the index.
+  const constellationTracks = useMemo(() => visibleTracks.slice(0, 18), [visibleTracks]);
+  const constellationKey = constellationTracks
+    .map((track) => track.track_id)
+    .join(",");
+  const fleetTrajectories = useResource(
+    async (signal) => {
+      const settled = await Promise.allSettled(
+        constellationTracks.map((track) =>
+          api.trackTrajectory(selectedId as string, track.track_id, signal),
+        ),
+      );
+      return constellationTracks.map((track, index): ConstellationObject => {
+        const result = settled[index];
+        const payload = result.status === "fulfilled" ? result.value : null;
+        return {
+          trackId: track.track_id,
+          level: track.observed.worst_level,
+          observations: track.observed.observations,
+          events: track.observed.anomalies,
+          available: Boolean(payload?.available),
+          points: payload?.points ?? [],
+        };
+      });
+    },
+    {
+      enabled: Boolean(selectedId) && constellationTracks.length > 0,
+      key: `${sessionKey}:${constellationKey}`,
+    },
+  );
+
+  const fleetObservations = visibleTracks.reduce(
+    (sum, track) => sum + track.observed.observations,
+    0,
+  );
+  const fleetElevated = visibleTracks.filter((track) => track.observed.anomalies > 0).length;
+  const fleetRegular = visibleTracks.filter(
+    (track) => track.observed.worst_level === "Normal",
+  ).length;
+  const fleetPeakSpeed = visibleTracks.reduce(
+    (peak, track) => Math.max(peak, track.motion.max_speed_px_s ?? 0),
+    0,
+  );
 
   const width = selected?.processing.width ?? 1280;
   const height = selected?.processing.height ?? 720;
@@ -274,7 +385,7 @@ export function TrackExplorerPage() {
       <PageHeader
         eyebrow="Trajectories"
         title="Track Explorer"
-        lede="Per-object telemetry for a persisted session: measured motion, retained centroid paths, observation rows and the events behind them."
+        lede="Per-object telemetry for the selected session."
         aside={
           selected ? (
             <span className="pill pill--accent mono">
@@ -347,10 +458,9 @@ export function TrackExplorerPage() {
                     <div className="track-deck__badges">
                       <LevelBadge level={activeTrack?.observed.worst_level ?? null} />
                       <StatusPill tone="muted" size="sm">
-                        {activeTrack?.appearance.color ?? "colour not reported"}
-                        {activeTrack?.appearance.shape
-                          ? ` · ${activeTrack.appearance.shape}`
-                          : ""}
+                        {activeTrack
+                          ? appearanceLabel(activeTrack.appearance)
+                          : "class not reported"}
                       </StatusPill>
                     </div>
                   </div>
@@ -381,7 +491,161 @@ export function TrackExplorerPage() {
                       </dd>
                     </div>
                   </dl>
+
+                  {activeTrack && (
+                    <LevelVerdict
+                      level={activeTrack.observed.worst_level}
+                      levels={activeTrack.observed.levels}
+                      observations={activeTrack.observed.observations}
+                      maxFused={activeTrack.motion.max_fused_score}
+                      thresholds={{
+                        suspicious: config.data?.anomaly?.threshold_suspicious ?? null,
+                        irregular: config.data?.anomaly?.threshold_irregular ?? null,
+                      }}
+                      evidence={activeEvidence}
+                      className="track-deck__why"
+                    />
+                  )}
                 </section>
+
+                <QuantumHero
+                  kicker="Track constellation · quantum scan"
+                  title={
+                    <>
+                      Every object is a <em>signal</em>
+                    </>
+                  }
+                  description="All tracked objects in this run are drawn together, named and colour-coded by their worst measured level. Cyan is regular, amber is suspicious, magenta is irregular. Select any object to focus its path, observations and evidence — nothing is hidden behind a chart."
+                  status={`${visibleTracks.length} objects in scope`}
+                  metrics={[
+                    {
+                      label: "Objects",
+                      value: formatNumber(visibleTracks.length),
+                      hint: `${formatNumber(fleetRegular)} regular`,
+                      tone: "accent",
+                    },
+                    {
+                      label: "Elevated",
+                      value: formatNumber(fleetElevated),
+                      hint: "carry an event",
+                      tone: "warn",
+                    },
+                    {
+                      label: "Observations",
+                      value: formatNumber(fleetObservations),
+                      hint: "persisted rows",
+                    },
+                    {
+                      label: "Peak speed",
+                      value: `${formatNumber(fleetPeakSpeed, 0)} px/s`,
+                      hint: "fastest object",
+                      tone: "bad",
+                    },
+                  ]}
+                />
+
+                <Panel
+                  title="Level playbook"
+                  sub="What the three bands mean for these objects"
+                  actions={<LevelLegend />}
+                >
+                  <LevelPlaybook levels={fleetLevels} />
+                </Panel>
+
+                <Panel
+                  title="Object constellation"
+                  sub={`${constellationTracks.length} objects · measured centroid paths in ${width} × ${height} source coordinates`}
+                  actions={<LevelLegend />}
+                  foot={
+                    fleetTrajectories.status === "error" ? (
+                      <>
+                        <span className="dot dot--warn" /> The trajectory requests failed; the index,
+                        roster and per-object detail below still read persisted rows.
+                      </>
+                    ) : (
+                      <>
+                        <span className="dot dot--live" /> Paths are drawn only from retained
+                        centroids; a gap in a path is missing evidence, not zero movement.
+                      </>
+                    )
+                  }
+                >
+                  {fleetTrajectories.status === "error" ? (
+                    <ErrorState
+                      error={fleetTrajectories.error}
+                      onRetry={fleetTrajectories.reload}
+                      compact
+                      title="Constellation trajectories unavailable"
+                    />
+                  ) : fleetTrajectories.status === "loading" && !fleetTrajectories.data ? (
+                    <LoadingRows rows={4} label="Loading object constellation" />
+                  ) : (
+                    <ObjectConstellation
+                      objects={fleetTrajectories.data ?? []}
+                      width={width}
+                      height={height}
+                      activeId={activeId}
+                      onPick={pickTrack}
+                    />
+                  )}
+                </Panel>
+
+                <Panel
+                  title="Fleet roster"
+                  sub={`${formatNumber(visibleTracks.length)} objects named · click to focus one`}
+                  actions={<LevelLegend />}
+                >
+                  {activeId !== null && (
+                    <p className="quantum-panel-intro">
+                      Active object <span className="mono">{formatTrackId(activeId)}</span> is
+                      highlighted in the constellation and in this roster. Bars under each name
+                      split its observations by the level the engine measured.
+                    </p>
+                  )}
+                  <FleetRoster
+                    objects={visibleTracks.map((track) => ({
+                      trackId: track.track_id,
+                      level: track.observed.worst_level,
+                      observations: track.observed.observations,
+                      anomalies: track.observed.anomalies,
+                      levels: track.observed.levels,
+                      maxSpeed: track.motion.max_speed_px_s,
+                      meanSpeed: track.motion.mean_speed_px_s,
+                      firstFrame: track.frames.first,
+                      lastFrame: track.frames.last,
+                      colour: track.appearance.color,
+                      shape: track.appearance.shape,
+                      className: classLabel(track.appearance),
+                      durationS: track.observed.duration_s,
+                    }))}
+                    activeId={activeId}
+                    onPick={pickTrack}
+                  />
+                </Panel>
+
+                <Panel
+                  title="Object map"
+                  sub={`${formatNumber(visibleTracks.length)} tracked objects · measured speed and peak fused score`}
+                  actions={<LevelLegend />}
+                >
+                  <div className="fleet-charts">
+                    <ScatterPlot
+                      points={fleetPoints}
+                      xLabel="peak speed px/s"
+                      yLabel="peak fused score"
+                      ariaLabel={`${fleetPoints.length} tracked objects plotted by peak speed and peak fused score`}
+                    />
+                    <div className="fleet-side">
+                      <LevelDonut levels={fleetLevels} centerLabel="observations" size={136} />
+                      <BarList
+                        ariaLabel="Objects by elevated observations"
+                        rows={fleetLeaders}
+                        formatValue={(value) => `${formatNumber(value)} ev`}
+                        emptyLabel="No elevated object in this filter"
+                      />
+                    </div>
+                  </div>
+                </Panel>
 
                 <Panel
                   title="Trajectory canvas"

@@ -42,6 +42,13 @@ def _table(rows: list[tuple[str, str]]) -> list[str]:
     return lines
 
 
+def _bar(share: float, width: int = 24) -> str:
+    """Fixed-width unicode bar so a text report still shows proportions."""
+    bounded = min(1.0, max(0.0, float(share)))
+    filled = int(round(bounded * width))
+    return "█" * filled + "░" * (width - filled)
+
+
 def build_report(payload: dict) -> str:
     detail = payload["detail"]
     summary = payload["summary"]
@@ -93,10 +100,31 @@ def build_report(payload: dict) -> str:
     add(f"- Per-object observations: **{counts['observations']}**")
     add("")
     shares = summary["level_share"]
-    lines.extend(_table([
-        (level, f"{levels[level]} observations ({shares[level]:.1%})")
-        for level in ("Normal", "Suspicious", "Irregular")
-    ]))
+    add("| Severity | Observations | Share | Distribution |")
+    add("| --- | --- | --- | --- |")
+    for level in ("Normal", "Suspicious", "Irregular"):
+        add(f"| {level} | {levels[level]} | {shares[level]:.1%} | "
+            f"`{_bar(shares[level])}` |")
+    add("")
+    if tracks:
+        add("### Tracked objects")
+        add("")
+        add("| Track | Colour | Shape | Observations (normal / elevated) "
+            "| Elevated share |")
+        add("| --- | --- | --- | --- | --- |")
+        ordered_tracks = sorted(tracks, key=lambda t: t["track_id"])
+        for track in ordered_tracks[:12]:
+            observed = track["observed"]["observations"] or 0
+            track_anomalies = track["observed"]["anomalies"] or 0
+            share = (track_anomalies / observed) if observed else 0.0
+            add(f"| {track['track_id']} | {_fmt(track['appearance']['color'])} "
+                f"| {_fmt(track['appearance']['shape'])} "
+                f"| {observed - track_anomalies} / {track_anomalies} "
+                f"| {share:.0%} `{_bar(share, 16)}` |")
+        add("")
+        if len(tracks) > 12:
+            add(f"_{len(tracks) - 12} further tracks are listed in section 4._")
+            add("")
 
     add("## 3. Anomalies")
     add("")
@@ -224,6 +252,17 @@ def build_report(payload: dict) -> str:
         f"**{media['preview_count']}**")
     if media["available"]:
         add(f"- Preview stride: every {media['preview_stride']}th frame")
+        frame_numbers = [entry.get("frame") for entry in
+                         (media.get("frames") or [])
+                         if isinstance(entry, dict) and entry.get("frame") is not None]
+        if frame_numbers:
+            shown = ", ".join(f"F{n}" for n in frame_numbers[:24])
+            add(f"- Retained annotated frames: {shown}"
+                + (f", +{len(frame_numbers) - 24} more"
+                   if len(frame_numbers) > 24 else ""))
+            add("- Each retained frame is an annotated preview (boxes, IDs and "
+                "level labels) available at "
+                f"`/api/v1/sessions/{detail['session']}/frames/<frame>`.")
     add(f"- Annotated video: **unavailable** — {media['annotated_video']['reason']}")
     for note in media["notes"]:
         add(f"- {note}")

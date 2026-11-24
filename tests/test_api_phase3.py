@@ -217,6 +217,24 @@ def _tiny_result(session: str, tone: int = 40) -> SessionResult:
         tracks=pd.DataFrame(columns=TRACK_COLS))
 
 
+def _result_with_evidence(session: str) -> SessionResult:
+    result = _tiny_result(session)
+    result.obs = pd.DataFrame([
+        {
+            "frame": i, "ts_s": i / 10.0, "track_id": 1,
+            "color": "red", "shape": "circle", "level": "Normal",
+            "fused_score": 0.1, "rule_score": 0.0, "ml_score": 0.0,
+            "scene_score": 0.0, "speed_px_s": 4.0, "direction_deg": 0.0,
+            "cx": 10.0 + i, "cy": 20.0,
+            "zone": None, "zone_dwell_s": 0.0, "rules_json": "[]",
+            "ml_note": "baseline", "scene_note": "normal",
+            "why": "normal observation",
+        }
+        for i in range(40)
+    ], columns=OBS_COLS)
+    return result
+
+
 def test_artifact_store_is_bounded(tmp_path):
     from src.api.session_store import SessionArtifactStore
 
@@ -233,6 +251,24 @@ def test_artifact_store_is_bounded(tmp_path):
     assert by_bytes.get("b1") is None
     assert by_bytes.get("b2") is not None
     assert by_bytes.stats()["bytes"] > 0
+
+
+def test_artifact_store_budget_counts_evidence_not_just_previews():
+    """Trajectories/evidence are retained data and must use the byte budget."""
+    from src.api.session_store import SessionArtifactStore
+
+    probe = SessionArtifactStore(max_sessions=10, max_bytes=10**9)
+    baseline = probe.record(_tiny_result("baseline"))
+    assert baseline is not None
+
+    # Two preview-only payloads fit, but two sessions with 40 evidence rows
+    # each must not: the budget has to account for the non-preview data.
+    bounded = SessionArtifactStore(max_sessions=10,
+                                   max_bytes=2 * baseline.n_bytes + 1)
+    bounded.record(_result_with_evidence("evidence_a"))
+    bounded.record(_result_with_evidence("evidence_b"))
+    assert bounded.get("evidence_a") is None
+    assert bounded.get("evidence_b") is not None
 
 
 def _wait_for(client: TestClient, job_id: str, timeout: float = 90.0) -> dict:
@@ -274,6 +310,14 @@ def test_session_list_pagination_and_ordering(client, seeded):
 
 def test_session_list_filters(client, seeded):
     assert client.get("/api/v1/sessions?kind=upload").json()["total"] == 1
+    # ISO-8601 offsets must be normalised to UTC before the lexical SQL
+    # comparison. Both bounds below cross a date boundary when read naively.
+    since_offset = client.get(
+        "/api/v1/sessions?since=2026-10-30T14:00:00%2B05:00").json()
+    assert since_offset["total"] == 2
+    until_offset = client.get(
+        "/api/v1/sessions?until=2026-10-31T05:00:00-05:00").json()
+    assert until_offset["total"] == 3
     assert client.get("/api/v1/sessions?synthetic=true").json()["total"] == 2
     assert client.get("/api/v1/sessions?has_labels=true").json()["total"] == 1
     assert client.get("/api/v1/sessions?has_anomalies=false").json()["total"] == 1
@@ -360,11 +404,14 @@ def test_track_list_filters_and_sorting(client, seeded):
     assert body["total"] == 2
     first = body["tracks"][0]
     assert first["track_id"] == 1
-    assert first["appearance"] == {"color": "red", "shape": "circle"}
+    assert first["appearance"] == {"color": "red", "shape": "circle",
+                                 "class_name": None}
+    # One irregular frame out of ten is an event, not the object's verdict;
+    # two elevated frames plus the sustained share make it Suspicious.
     assert first["observed"] == {
         "observations": 10, "anomalies": 3,
         "levels": {"Normal": 7, "Suspicious": 2, "Irregular": 1},
-        "worst_level": "Irregular", "duration_s": pytest.approx(0.36),
+        "worst_level": "Suspicious", "duration_s": pytest.approx(0.36),
     }
     assert first["motion"]["mean_speed_px_s"] == 145.0
     assert first["motion"]["speed_source"] == "track_summary"
@@ -374,7 +421,10 @@ def test_track_list_filters_and_sorting(client, seeded):
     assert [t["track_id"] for t in only_anomalies["tracks"]] == [1]
     irregular = client.get(
         f"/api/v1/sessions/{ALPHA}/tracks?level=Irregular").json()
-    assert irregular["total"] == 1
+    assert irregular["total"] == 0       # one isolated frame is not a verdict
+    suspicious = client.get(
+        f"/api/v1/sessions/{ALPHA}/tracks?level=Suspicious").json()
+    assert [t["track_id"] for t in suspicious["tracks"]] == [1]
     normal_only = client.get(
         f"/api/v1/sessions/{ALPHA}/tracks?level=Normal").json()
     assert [t["track_id"] for t in normal_only["tracks"]] == [2]
@@ -540,7 +590,7 @@ def test_anomaly_filters_and_detail(client, seeded):
     detail = client.get(
         f"/api/v1/sessions/{ALPHA}/anomalies/{irregular_id}").json()
     assert detail["track"]["track_id"] == 1
-    assert detail["track"]["worst_level"] == "Irregular"
+    assert detail["track"]["worst_level"] == "Suspicious"
     assert detail["frame_info"]["media_available"] is False
     assert detail["frame_info"]["frame_url"] is None
     assert detail["evidence"]["available"] is False
@@ -646,7 +696,7 @@ def test_csv_export_is_session_specific(client, seeded):
     rows = list(tracks)
     assert rows[0][0] == "track_id"
     assert len(rows) == 3
-    assert rows[1][0] == "1" and rows[1][10] == "Irregular"
+    assert rows[1][0] == "1" and rows[1][10] == "Suspicious"
 
     empty = client.get(f"/api/v1/sessions/{EMPTY}/export/csv")
     assert len(list(csv.reader(io.StringIO(empty.text)))) == 1
@@ -753,7 +803,7 @@ def test_openapi_documents_each_analytics_path_once(client):
     spec = client.get("/openapi.json").json()
     keys = [key for key in spec["paths"]
             if key.startswith("/api/v1/sessions")]
-    assert len(keys) == 16
+    assert len(keys) == 18
     assert "/sessions" not in spec["paths"]
     for path in keys:
         for operation in spec["paths"][path].values():
@@ -765,3 +815,9 @@ def test_openapi_documents_each_analytics_path_once(client):
     frame = spec["paths"][
         "/api/v1/sessions/{session_id}/frames/{frame_number}"]["get"]
     assert "image/jpeg" in frame["responses"]["200"]["content"]
+    crop = spec["paths"][
+        "/api/v1/sessions/{session_id}/crops/{track_id}"]["get"]
+    assert "image/jpeg" in crop["responses"]["200"]["content"]
+    evidence = spec["paths"][
+        "/api/v1/sessions/{session_id}/object-evidence"]["get"]
+    assert evidence["responses"]["200"]

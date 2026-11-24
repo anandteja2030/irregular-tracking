@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from config.config import load_config
@@ -42,7 +43,9 @@ class FrameResult:
 class TrackingPipeline:
     """Stateful streaming pipeline; instantiate once per video/session."""
 
-    def __init__(self, session: str = "session0", logger=None, detector=None):
+    def __init__(self, session: str = "session0", logger=None, detector=None,
+                 motion_augment: bool = False,
+                 use_object_detector: bool = False):
         cfg = load_config()
         self.cfg = cfg
         self.preprocessor = Preprocessor(cfg.preprocess)
@@ -63,25 +66,51 @@ class TrackingPipeline:
         self.n_frames = 0
         self._zone_dwell: dict[int, float] = {}  # track_id -> seconds inside a zone
         self._frame_size: tuple[int, int] = (1, 1)   # (w, h) of the current frame
+        # Live-only: add a background-subtraction mask so real-world moving
+        # objects are found even when they are dark, grey or low-saturation.
+        # File runs keep the calibrated colour path unchanged.
+        self.motion_augment = bool(motion_augment)
+        # Real-camera runs use the pretrained COCO detector so tracks carry a
+        # real class (car / truck / person) instead of a colour-shape guess.
+        # Synthetic samples and the live colour/motion path keep the tracker's
+        # original candidate source.
+        self.object_detector = None
+        if use_object_detector and cfg.detector.enabled:
+            from src.video.object_detector import get_object_detector
+            candidate = get_object_detector()
+            self.object_detector = candidate if candidate.available else None
+        self._bg = (cv2.createBackgroundSubtractorMOG2(
+            history=30, varThreshold=25, detectShadows=False)
+            if self.motion_augment else None)
+        self._bg_frames = 0
 
     # ---------------------------------------------------------------- facet
     def process_frame(self, bgr: np.ndarray, frame_idx: int, fps: float) -> FrameResult:
         self.n_frames += 1
         h, w = bgr.shape[:2]
         self._frame_size = (w, h)
-        pm = self.preprocessor.process(bgr)
-        hsv = pm.hsv
 
-        # Candidate mask: any configured colour range OR high-saturation pixels
-        # (colour-agnostic fallback), cleaned with the standard morphology.
-        color_mask = self.color_detector.mask_any(hsv)
-        s, v = hsv[:, :, 1], hsv[:, :, 2]
-        sat_mask = ((s > 60) & (v > 60)).astype(np.uint8) * 255
-        combined = np.bitwise_or(color_mask, sat_mask)
-        combined = self.preprocessor.clean_mask(combined)
-
-        dets = self.contour_detector.detect(frame_idx, hsv, combined)
+        if self.object_detector is not None:
+            # Real objects only: the detector names each one, so no colour blob
+            # from the background can become a track.
+            dets = self.object_detector.detect(bgr, frame_idx)
+        else:
+            pm = self.preprocessor.process(bgr)
+            hsv = pm.hsv
+            # Candidate mask: any configured colour range OR high-saturation
+            # pixels (colour-agnostic fallback), cleaned with morphology.
+            color_mask = self.color_detector.mask_any(hsv)
+            s, v = hsv[:, :, 1], hsv[:, :, 2]
+            sat_mask = ((s > 60) & (v > 60)).astype(np.uint8) * 255
+            combined = np.bitwise_or(color_mask, sat_mask)
+            if self.motion_augment:
+                combined = np.bitwise_or(combined, self._motion_mask(pm.gray))
+            combined = self.preprocessor.clean_mask(combined)
+            dets = self.contour_detector.detect(frame_idx, hsv, combined)
         tracked = self.tracker.update(dets, frame_idx)
+        # A track is only reported after the tracker's debounce, so one-frame
+        # false detections never reach the results, the tables or the report.
+        tracked = [o for o in tracked if o.confirmed]
         scene_stats = self.calibrator.stats()
 
         entries = [self._observe_and_classify(o, fps, scene_stats, frame_idx)
@@ -100,6 +129,28 @@ class TrackingPipeline:
         return FrameResult(frame_idx=frame_idx, annotated_bgr=annotated,
                            entries=entries, n_detections=len(dets),
                            calibrated=scene_stats.ready)
+
+    # ---------------------------------------------------- motion support
+    def _motion_mask(self, gray: np.ndarray) -> np.ndarray:
+        """Moving-foreground mask from a per-pixel background model.
+
+        MOG2 adapts each pixel separately, so a vacated position stops being
+        reported after a couple of frames instead of leaving a ghost track,
+        while a slow object is not absorbed into the background as quickly as a
+        single running average would be. The first frame only seeds the model,
+        so a captured stream never invents motion on its opening frame. The
+        mask is unioned with the colour mask, so saturated objects are still
+        detected while stationary and unsaturated objects while moving.
+        """
+        if self._bg is None:
+            return np.zeros_like(gray)
+        self._bg_frames += 1
+        mask = self._bg.apply(gray)
+        if self._bg_frames <= 1:
+            return np.zeros_like(gray)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
     # ------------------------------------------------------- zone state
     def _zone_state(self, track_id: int, centroid: tuple[float, float],
@@ -149,10 +200,13 @@ class TrackingPipeline:
         return {
             "frame_idx": frame_idx,
             "track_id": obj.track_id,
+            "misses": int(getattr(obj, "misses", 0)),
+            "confirmed": bool(getattr(obj, "confirmed", True)),
             "centroid": obj.centroid,
             "bbox_wh": obj.box_wh,
             "color": obj.color,
             "shape": obj.shape,
+            "class_name": obj.class_name,
             "speed_px_s": round(snap.speed_px_s, 1),
             "direction_deg": (None if snap.direction_deg is None
                               else round(snap.direction_deg, 1)),
@@ -179,11 +233,13 @@ class TrackingPipeline:
         out = []
         stats = self.calibrator.stats()
         for t in self.tracker.all_time_tracks():
-            traj_stats = TrajectoryFeatures.from_track(list(t.positions), fps, t.id)
+            traj_stats = TrajectoryFeatures.from_track(
+                list(t.positions), fps, t.id, min_positions=2)
             if traj_stats is None:
                 continue
             out.append({
                 "track_id": t.id, "color": t.color, "shape": t.shape,
+                "class_name": t.class_name,
                 "stats": traj_stats, "first_frame": t.first_frame,
                 "last_frame": t.last_frame, "scene_ready": stats.ready,
             })

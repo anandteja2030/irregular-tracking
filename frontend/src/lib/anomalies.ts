@@ -50,6 +50,191 @@ export function anomalyTypeLabel(event: AnomalyItem): string {
   return rules.length > 0 ? rules.join(" · ") : "Unclassified";
 }
 
+/** Plain-language reading of the rule names the engine can persist.
+ * Unknown rule names fall back to their underscored identifier, never to a
+ * guessed meaning. */
+const RULE_MEANING: Record<string, string> = {
+  excessive_speed: "moved faster than this scene's fast envelope",
+  direction_against_flow: "headed against the scene's dominant traffic flow",
+  erratic_heading: "changed heading sharply between frames",
+  sudden_acceleration: "accelerated abruptly between frames",
+  zone_violation: "stayed inside a monitored zone past its dwell limit",
+  loitering: "lingered in roughly one place longer than the scene norm",
+};
+
+export function ruleLabel(rule: string): string {
+  return rule.replace(/_/g, " ");
+}
+
+export function ruleMeaning(rule: string): string {
+  return RULE_MEANING[rule] ?? ruleLabel(rule);
+}
+
+/** A compact, persisted "why this event" sentence.
+ *
+ * Prefers the rule description the engine wrote for this exact observation,
+ * then the ML or scene note, then the persisted summary. Nothing is composed
+ * from a rule name alone, and missing evidence stays visibly missing. */
+export function eventWhy(event: AnomalyItem): string {
+  const described = (event.evidence?.rules ?? [])
+    .map((rule) => (typeof rule.description === "string" ? rule.description.trim() : ""))
+    .filter((text) => text.length > 0);
+  if (described.length > 0) return described.join(" · ");
+  if (event.evidence?.ml_note) return event.evidence.ml_note;
+  if (event.evidence?.scene_note) return event.evidence.scene_note;
+  if (event.summary) return event.summary;
+  return "No persisted explanation was recorded for this event.";
+}
+
+export interface TrackEventReason {
+  trackId: number;
+  /** Most frequent rule among this track's retained events. */
+  topRule: string | null;
+  topRuleEvents: number;
+  /** Description retained on one of those events. */
+  topRuleWhy: string | null;
+  events: number;
+  firstFrame: number;
+  lastFrame: number;
+}
+
+/** Per-object event reasons, derived only from loaded event evidence. */
+export function trackEventReasons(events: AnomalyItem[]): Map<number, TrackEventReason> {
+  const byTrack = new Map<
+    number,
+    {
+      rules: Map<string, number>;
+      descriptions: Map<string, string>;
+      events: number;
+      firstFrame: number;
+      lastFrame: number;
+    }
+  >();
+  for (const event of events) {
+    const current = byTrack.get(event.track_id) ?? {
+      rules: new Map<string, number>(),
+      descriptions: new Map<string, string>(),
+      events: 0,
+      firstFrame: event.frame,
+      lastFrame: event.frame,
+    };
+    current.events += 1;
+    if (event.frame < current.firstFrame) current.firstFrame = event.frame;
+    if (event.frame > current.lastFrame) current.lastFrame = event.frame;
+    const seen = new Set<string>();
+    for (const rule of event.evidence?.rules ?? []) {
+      if (!rule.rule || seen.has(rule.rule)) continue;
+      seen.add(rule.rule);
+      current.rules.set(rule.rule, (current.rules.get(rule.rule) ?? 0) + 1);
+      if (rule.description && !current.descriptions.has(rule.rule)) {
+        current.descriptions.set(rule.rule, rule.description);
+      }
+    }
+    byTrack.set(event.track_id, current);
+  }
+
+  const out = new Map<number, TrackEventReason>();
+  for (const [trackId, value] of byTrack) {
+    const sorted = [...value.rules.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
+    out.set(trackId, {
+      trackId,
+      topRule: sorted[0]?.[0] ?? null,
+      topRuleEvents: sorted[0]?.[1] ?? 0,
+      topRuleWhy: sorted[0] ? (value.descriptions.get(sorted[0][0]) ?? null) : null,
+      events: value.events,
+      firstFrame: value.firstFrame,
+      lastFrame: value.lastFrame,
+    });
+  }
+  return out;
+}
+
+export interface TrackEvidenceSummary {
+  trackId: number;
+  /** Elevated events retained for this object in the loaded set. */
+  events: number;
+  /** Rule triggers counted once per event, most frequent first. */
+  rules: { rule: string; count: number; description: string | null }[];
+  /** Events whose persisted evidence carried a model note / scene note. */
+  mlEvents: number;
+  sceneEvents: number;
+  /** One persisted model note for this object, quoted verbatim. */
+  mlNote: string | null;
+  /** One persisted scene note for this object, quoted verbatim. */
+  sceneNote: string | null;
+}
+
+/** Per-object rule and model evidence, counted from the events actually loaded.
+ * A track with no entry here simply had no elevated event in the loaded set. */
+export function trackEvidenceSummary(
+  events: AnomalyItem[],
+): Map<number, TrackEvidenceSummary> {
+  const byTrack = new Map<
+    number,
+    {
+      events: number;
+      rules: Map<string, { count: number; description: string | null }>;
+      mlEvents: number;
+      sceneEvents: number;
+      mlNote: string | null;
+      sceneNote: string | null;
+    }
+  >();
+
+  for (const event of events) {
+    const current = byTrack.get(event.track_id) ?? {
+      events: 0,
+      rules: new Map<string, { count: number; description: string | null }>(),
+      mlEvents: 0,
+      sceneEvents: 0,
+      mlNote: null,
+      sceneNote: null,
+    };
+    current.events += 1;
+    const seen = new Set<string>();
+    for (const rule of event.evidence?.rules ?? []) {
+      if (!rule.rule || seen.has(rule.rule)) continue;
+      seen.add(rule.rule);
+      const entry = current.rules.get(rule.rule) ?? {
+        count: 0,
+        description:
+          typeof rule.description === "string" && rule.description.trim().length > 0
+            ? rule.description.trim()
+            : null,
+      };
+      entry.count += 1;
+      current.rules.set(rule.rule, entry);
+    }
+    if (event.evidence?.ml_note) {
+      current.mlEvents += 1;
+      if (current.mlNote === null) current.mlNote = event.evidence.ml_note;
+    }
+    if (event.evidence?.scene_note) {
+      current.sceneEvents += 1;
+      if (current.sceneNote === null) current.sceneNote = event.evidence.scene_note;
+    }
+    byTrack.set(event.track_id, current);
+  }
+
+  const out = new Map<number, TrackEvidenceSummary>();
+  for (const [trackId, value] of byTrack) {
+    out.set(trackId, {
+      trackId,
+      events: value.events,
+      rules: [...value.rules.entries()]
+        .map(([rule, entry]) => ({ rule, ...entry }))
+        .sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule)),
+      mlEvents: value.mlEvents,
+      sceneEvents: value.sceneEvents,
+      mlNote: value.mlNote,
+      sceneNote: value.sceneNote,
+    });
+  }
+  return out;
+}
+
 export function anomalyTypeOptions(events: AnomalyItem[]): string[] {
   const types = new Set<string>();
   for (const event of events) {

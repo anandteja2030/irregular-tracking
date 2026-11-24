@@ -1,5 +1,7 @@
 import type { SessionItem } from "../lib/types";
 import { formatDuration, formatNumber, formatResolution } from "../lib/format";
+import { MetricCard, MetricGrid } from "./MetricCard";
+import { Sparkline } from "./charts";
 import { LevelBadge, LevelMeter } from "./SessionBits";
 
 interface SessionHistoryPanelProps {
@@ -8,7 +10,7 @@ interface SessionHistoryPanelProps {
   onOpen: (sessionId: string) => void;
 }
 
-/** Persisted runs, including those written by the CLI or Streamlit. */
+/** Persisted runs, including those written by the CLI or the API. */
 export function SessionHistoryPanel({ sessions, selectedId, onOpen }: SessionHistoryPanelProps) {
   if (sessions.length === 0) {
     return (
@@ -17,6 +19,24 @@ export function SessionHistoryPanel({ sessions, selectedId, onOpen }: SessionHis
       </p>
     );
   }
+
+  const totals = sessions.reduce(
+    (sum, session) => {
+      sum.observations += session.counts.observations;
+      sum.tracks += session.counts.tracks;
+      sum.events += session.counts.anomalies;
+      sum.levels.Normal += session.counts.levels.Normal;
+      sum.levels.Suspicious += session.counts.levels.Suspicious;
+      sum.levels.Irregular += session.counts.levels.Irregular;
+      return sum;
+    },
+    {
+      observations: 0,
+      tracks: 0,
+      events: 0,
+      levels: { Normal: 0, Suspicious: 0, Irregular: 0 },
+    },
+  );
 
   return (
     <>
@@ -87,6 +107,33 @@ export function SessionHistoryPanel({ sessions, selectedId, onOpen }: SessionHis
             })}
           </tbody>
         </table>
+      </div>
+      <div className="archive-summary">
+        <MetricGrid columns={4} label="Archive totals across persisted runs">
+          <MetricCard label="Persisted runs" value={formatNumber(sessions.length)} tone="accent" />
+          <MetricCard label="Observations" value={formatNumber(totals.observations)} />
+          <MetricCard label="Tracks" value={formatNumber(totals.tracks)} tone="accent-2" />
+          <MetricCard label="Elevated events" value={formatNumber(totals.events)} tone="warn" />
+        </MetricGrid>
+        <div className="archive-summary__levels">
+          <span className="mini-label">Archive level mix · every persisted observation</span>
+          <LevelMeter levels={totals.levels} />
+        </div>
+        {sessions.length > 1 ? (
+          <div className="archive-summary__series">
+            <span className="mini-label">Observations per persisted run · oldest → newest</span>
+            <Sparkline
+              values={[...sessions].reverse().map((session) => session.counts.observations)}
+              height={54}
+              color="var(--chart-1)"
+              ariaLabel="Persisted observations per run, oldest to newest"
+            />
+          </div>
+        ) : (
+          <p className="hint hint--flush">
+            One persisted run is stored, so there is no archive trend to plot yet.
+          </p>
+        )}
       </div>
       <p className="hint hint--flush">
         Preview frames and centroid paths are retained in the API process for the most recent runs only.

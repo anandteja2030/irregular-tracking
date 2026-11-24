@@ -7,6 +7,7 @@ import "./styles/shell.css";
 import "./styles/components.css";
 import "./styles/pages.css";
 import "./styles/primitives.css";
+import "./styles/quantum.css";
 import App from "./App";
 
 const container = document.getElementById("root");

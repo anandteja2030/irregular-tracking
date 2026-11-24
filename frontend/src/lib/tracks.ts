@@ -33,6 +33,29 @@ export function formatTrackId(trackId: number): string {
   return `T${String(trackId).padStart(2, "0")}`;
 }
 
+export interface TrackAppearance {
+  color: string | null;
+  shape: string | null;
+  class_name?: string | null;
+}
+
+/** What the detector recognised, capitalised for display ("car" -> "Car"). */
+export function classLabel(appearance: TrackAppearance | null | undefined): string | null {
+  const raw = appearance?.class_name?.trim();
+  if (!raw) return null;
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+/** Healthy label for an object: its class, or the colour-engine fallback. */
+export function appearanceLabel(appearance: TrackAppearance | null | undefined): string {
+  const detected = classLabel(appearance);
+  if (detected) return detected;
+  if (appearance?.color) {
+    return `${appearance.color}${appearance.shape ? ` · ${appearance.shape}` : ""}`;
+  }
+  return "class not reported";
+}
+
 /** Query parameters accepted by GET /sessions/{id}/tracks. */
 export function trackListParams(
   levelFilter: TrackLevelFilter,
@@ -46,6 +69,7 @@ function searchTokens(track: TrackItem): string[] {
     String(track.track_id),
     `t${track.track_id}`,
     formatTrackId(track.track_id).toLowerCase(),
+    track.appearance.class_name ?? "",
     track.appearance.color ?? "",
     track.appearance.shape ?? "",
     ...track.motion.summary_directions,

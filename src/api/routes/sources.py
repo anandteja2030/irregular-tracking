@@ -2,7 +2,7 @@
 
 Every number returned here comes from decoding the file with OpenCV. Bundled
 samples are synthetic and are labelled as such, matching the disclosure the
-Streamlit UI already shows.
+console already shows.
 """
 from __future__ import annotations
 

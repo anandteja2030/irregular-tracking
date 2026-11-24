@@ -20,11 +20,18 @@ from fastapi.testclient import TestClient
 from config.config import load_config
 from scripts.run_pipeline import main as cli_main
 from src.analysis.calibration import SceneStats
+from src.analysis.features import TrajectoryStats
 from src.analysis.logger import (
     CALIBRATION_SNAPSHOT_VERSION,
     SCHEMA_VERSION,
     SUPPORTED_CALIBRATION_SNAPSHOT_VERSIONS,
     ResultLogger,
+)
+from src.analysis.snapshot_validation import (
+    MAX_CALIBRATION_SAMPLES,
+    MAX_CALIBRATION_TRACKS,
+    MAX_OBSERVED_SECONDS,
+    MAX_SPEED_PX_S,
 )
 from src.api import repository as repo
 from src.api.main import app
@@ -110,6 +117,70 @@ def _point_rows(db_path) -> list[tuple]:
         return conn.execute(
             "SELECT track_id, frame_idx, x, y FROM track_points"
             " ORDER BY track_id, frame_idx").fetchall()
+    finally:
+        conn.close()
+
+
+def _summary(*, color: str = "red") -> dict:
+    """One real-shape track summary for exercising the summary table."""
+    return {
+        "stats": TrajectoryStats(
+            track_id=0, n_points=4, n_seconds=0.3,
+            mean_speed_px_s=20.0, max_speed_px_s=20.0,
+            path_length_px=15.0, net_displacement_px=15.0,
+            straightness=1.0, direction_hist={"E": 4}, dwell_seconds=0.3,
+            start=(100.0, 50.0), end=(115.0, 59.0),
+            bbox_extent=(15.0, 9.0)),
+        "color": color, "shape": "circle",
+        "first_frame": 0, "last_frame": 3,
+    }
+
+
+def _seed_atomic_pair() -> tuple[SessionResult, SessionResult]:
+    """Save a complete old session, then prepare a different replacement."""
+    old = make_result("atomic_target", scene_stats=scene())
+    old.summaries = [_summary(color="red")]
+    old.source_label = "old source"
+    save_session_to_db(old)
+
+    new = make_result("atomic_target", frames=6, scene_stats=scene())
+    new.obs["cx"] = new.obs["cx"] + 1000.0
+    new.obs["cy"] = new.obs["cy"] + 500.0
+    new.summaries = [_summary(color="blue")]
+    new.source_label = "new source"
+    new.ended_ts = "2026-11-10T00:00:06+00:00"
+    return old, new
+
+
+def _session_state(db_path, session: str) -> dict:
+    """Every persisted value for one session, independent of the API."""
+    conn = sqlite3.connect(db_path)
+    try:
+        return {
+            "events": conn.execute(
+                "SELECT frame_idx, track_id, level, fused_score, rule_score,"
+                " ml_score, scene_score, speed_px_s, direction_deg, why"
+                " FROM track_events WHERE session = ?"
+                " ORDER BY frame_idx, track_id", (session,)).fetchall(),
+            "summaries": conn.execute(
+                "SELECT track_id, color, shape, n_points, n_seconds,"
+                " mean_speed_px_s, max_speed_px_s, path_length_px,"
+                " straightness, directions, first_frame, last_frame"
+                " FROM track_summaries WHERE session = ?"
+                " ORDER BY track_id", (session,)).fetchall(),
+            "run": conn.execute(
+                "SELECT session, source, kind, synthetic, frames, width,"
+                " height, fps, wall_s, max_frames, started_ts, ended_ts"
+                " FROM run_stats WHERE session = ?", (session,)).fetchone(),
+            "points": conn.execute(
+                "SELECT track_id, frame_idx, ts_s, x, y, level, speed_px_s,"
+                " direction_deg FROM track_points WHERE session = ?"
+                " ORDER BY track_id, frame_idx", (session,)).fetchall(),
+            "calibration": conn.execute(
+                "SELECT schema_version, captured_ts, payload"
+                " FROM calibration_snapshots WHERE session = ?",
+                (session,)).fetchone(),
+        }
     finally:
         conn.close()
 
@@ -381,6 +452,147 @@ def test_failed_point_batch_rolls_back(db):
     ]
 
 
+# ---------------------------------------------------- atomic session save
+def _assert_failed_save_preserves(db, monkeypatch, result, method_name,
+                                 replacement) -> None:
+    before = _session_state(db, result.session)
+    monkeypatch.setattr(ResultLogger, method_name, replacement)
+    with pytest.raises(sqlite3.OperationalError, match="injected"):
+        save_session_to_db(result)
+    assert _session_state(db, result.session) == before
+
+
+def test_successful_save_replaces_all_session_rows(db):
+    _, new = _seed_atomic_pair()
+
+    counts = save_session_to_db(new)
+
+    assert counts == {"events": 12, "summaries": 1, "points": 12,
+                      "calibration": True}
+    state = _session_state(db, "atomic_target")
+    assert len(state["events"]) == 12
+    assert state["summaries"][0][1] == "blue"
+    assert state["run"][1] == "new source"
+    assert len(state["points"]) == 12
+    assert state["points"][0][3] == pytest.approx(1100.0)
+    assert state["calibration"][1] == "2026-11-10T00:00:06+00:00"
+
+
+def test_failed_first_save_leaves_no_partial_session(db, monkeypatch):
+    new = make_result("first_save", frames=4, scene_stats=scene())
+    new.summaries = [_summary()]
+
+    def fail(self, session, points):
+        raise sqlite3.OperationalError("injected during first save")
+
+    monkeypatch.setattr(ResultLogger, "log_track_points", fail)
+    with pytest.raises(sqlite3.OperationalError, match="injected"):
+        save_session_to_db(new)
+
+    assert _session_state(db, "first_save") == {
+        "events": [], "summaries": [], "run": None, "points": [],
+        "calibration": None,
+    }
+
+
+def test_failed_save_after_clearing_events_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+
+    def fail(self, session):
+        raise sqlite3.OperationalError("injected after clearing events")
+
+    _assert_failed_save_preserves(
+        db, monkeypatch, new, "clear_session_summaries", fail)
+
+
+def test_failed_save_after_writing_events_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+    new.summaries = []                   # fail before any summary is written
+
+    def fail(self, info):
+        raise sqlite3.OperationalError("injected after writing events")
+
+    _assert_failed_save_preserves(db, monkeypatch, new, "log_run", fail)
+
+
+def test_failed_save_after_writing_summaries_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+
+    def fail(self, info):
+        raise sqlite3.OperationalError("injected after writing summaries")
+
+    _assert_failed_save_preserves(db, monkeypatch, new, "log_run", fail)
+
+
+def test_failed_save_after_writing_run_stats_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+
+    def fail(self, session, points):
+        raise sqlite3.OperationalError("injected after writing run stats")
+
+    _assert_failed_save_preserves(
+        db, monkeypatch, new, "log_track_points", fail)
+
+
+def test_failed_save_during_trajectory_insertion_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+    original = ResultLogger.log_track_points
+
+    def fail_after_partial_batch(self, session, points):
+        original(self, session, points[:2])
+        raise sqlite3.OperationalError("injected during trajectory insertion")
+
+    _assert_failed_save_preserves(
+        db, monkeypatch, new, "log_track_points", fail_after_partial_batch)
+
+
+def test_failed_save_during_calibration_insertion_restores_previous_session(
+        db, monkeypatch):
+    _, new = _seed_atomic_pair()
+    original = ResultLogger.log_calibration
+
+    def fail_after_snapshot(self, session, snapshot):
+        original(self, session, snapshot)
+        raise sqlite3.OperationalError("injected during calibration insertion")
+
+    _assert_failed_save_preserves(
+        db, monkeypatch, new, "log_calibration", fail_after_snapshot)
+
+
+def test_nested_transactions_do_not_commit_early(db):
+    _seed_atomic_pair()
+    before = _session_state(db, "atomic_target")
+    log = ResultLogger(db, session="atomic_target")
+    try:
+        with pytest.raises(RuntimeError, match="stop"):
+            with log.transaction():
+                log.clear_session_events("atomic_target")
+                with log.transaction():
+                    log.log_event(0, {"track_id": 0, "level": "Normal"})
+                raise RuntimeError("stop")
+    finally:
+        log.close()
+
+    assert _session_state(db, "atomic_target") == before
+
+
+def test_saving_one_session_does_not_change_another(db):
+    other = make_result("other_session", scene_stats=scene())
+    other.summaries = [_summary(color="green")]
+    save_session_to_db(other)
+    other_before = _session_state(db, "other_session")
+
+    _, new = _seed_atomic_pair()
+    save_session_to_db(new)
+
+    assert _session_state(db, "other_session") == other_before
+
+
 def test_reads_during_a_rewrite_stay_consistent(db):
     result = make_result("concurrent", scene_stats=scene())
     save_session_to_db(result)
@@ -427,7 +639,8 @@ def test_points_for_an_unknown_session_are_rejected(db):
 
 
 # --------------------------------------------------- snapshot version checks
-def _set_snapshot(db_path, session: str, *, version=..., payload=None) -> None:
+def _set_snapshot(db_path, session: str, *, version=..., payload=None,
+                  captured_ts=...) -> None:
     conn = sqlite3.connect(db_path)
     try:
         if payload is not None:
@@ -438,9 +651,47 @@ def _set_snapshot(db_path, session: str, *, version=..., payload=None) -> None:
             conn.execute(
                 "UPDATE calibration_snapshots SET schema_version = ?"
                 " WHERE session = ?", (version, session))
+        if captured_ts is not ...:
+            conn.execute(
+                "UPDATE calibration_snapshots SET captured_ts = ?"
+                " WHERE session = ?", (captured_ts, session))
         conn.commit()
     finally:
         conn.close()
+
+
+def _stored_snapshot(db_path, session: str) -> dict:
+    conn = sqlite3.connect(db_path)
+    try:
+        payload = conn.execute(
+            "SELECT payload FROM calibration_snapshots WHERE session = ?",
+            (session,)).fetchone()[0]
+    finally:
+        conn.close()
+    return json.loads(payload)
+
+
+def _assert_snapshot_unavailable(client, session: str, needle: str) -> None:
+    scene_body = client.get(f"/api/v1/sessions/{session}/scene").json()
+    calibration = scene_body["calibration"]
+    assert calibration["available"] is False
+    assert calibration["persisted"] is False
+    assert calibration["snapshot_version"] is None
+    assert needle in calibration["reason"]
+    assert scene_body["source"] == "derived_observations"
+
+    detail = client.get(f"/api/v1/sessions/{session}").json()
+    assert detail["artifacts"]["scene_calibration"] is False
+    assert any(needle in note for note in detail["limitations"])
+
+
+def test_deeply_nested_snapshot_payload_is_not_interpreted(db, client):
+    save_session_to_db(make_result("deep_payload", scene_stats=scene()))
+    deep = ('{"calibration":' + '[' * 10_000 + '0' + ']' * 10_000
+            + ',"parameters":{}}')
+    _set_snapshot(db, "deep_payload", payload=deep)
+
+    _assert_snapshot_unavailable(client, "deep_payload", "malformed JSON")
 
 
 def test_unknown_snapshot_version_is_not_interpreted(db, client):
@@ -456,6 +707,14 @@ def test_unknown_snapshot_version_is_not_interpreted(db, client):
     assert "not supported" in calibration["reason"]
     assert body["source"] == "derived_observations"
     assert body["speed_baseline"]["source"] == "derived_event_observations"
+
+
+@pytest.mark.parametrize("version", [1.5, float("inf")])
+def test_unreadable_snapshot_version_is_not_interpreted(db, client, version):
+    save_session_to_db(make_result("bad_version", scene_stats=scene()))
+    _set_snapshot(db, "bad_version", version=version)
+
+    _assert_snapshot_unavailable(client, "bad_version", "unreadable")
 
 
 def test_missing_snapshot_version_is_not_interpreted(db, client):
@@ -499,6 +758,327 @@ def test_malformed_snapshot_payload_is_not_interpreted(db, client):
     assert body["source"] == "derived_observations"
 
 
+def test_snapshot_parameters_must_be_a_dictionary(db, client):
+    save_session_to_db(make_result("bad_parameters", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_parameters")
+    payload["parameters"] = ["not", "a", "dict"]
+    _set_snapshot(db, "bad_parameters", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_parameters", "parameters")
+
+
+def test_snapshot_missing_numeric_field_is_not_interpreted(db, client):
+    save_session_to_db(make_result("missing_numeric", scene_stats=scene()))
+    payload = _stored_snapshot(db, "missing_numeric")
+    payload["calibration"].pop("speed_p50")
+    _set_snapshot(db, "missing_numeric", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "missing_numeric", "missing required")
+
+
+def test_snapshot_wrong_numeric_type_is_not_interpreted(db, client):
+    save_session_to_db(make_result("wrong_numeric", scene_stats=scene()))
+    payload = _stored_snapshot(db, "wrong_numeric")
+    payload["calibration"]["n_samples"] = "eight"
+    _set_snapshot(db, "wrong_numeric", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "wrong_numeric", "n_samples")
+
+
+def test_snapshot_malformed_histogram_is_not_interpreted(db, client):
+    save_session_to_db(make_result("bad_histogram", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_histogram")
+    payload["calibration"]["direction_hist"] = ["E", "W"]
+    _set_snapshot(db, "bad_histogram", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_histogram", "histogram")
+
+
+def test_snapshot_histogram_boundary_values_are_accepted(db, client):
+    save_session_to_db(make_result("histogram_bounds", scene_stats=scene()))
+    payload = _stored_snapshot(db, "histogram_bounds")
+    payload["calibration"]["direction_hist"] = {"E": 0.0, "W": 1.0}
+    payload["calibration"]["dominant_directions"] = ["W"]
+    _set_snapshot(db, "histogram_bounds", payload=json.dumps(payload))
+
+    snapshot, problem = repo.read_calibration_snapshot("histogram_bounds")
+    assert problem is None
+    assert snapshot is not None
+
+    scene_body = client.get("/api/v1/sessions/histogram_bounds/scene").json()
+    assert scene_body["calibration"]["available"] is True
+    assert scene_body["directions"]["histogram"] == {"E": 0.0, "W": 1.0}
+
+
+def test_snapshot_empty_histogram_is_accepted(db, client):
+    save_session_to_db(make_result("empty_histogram", scene_stats=scene()))
+    payload = _stored_snapshot(db, "empty_histogram")
+    payload["calibration"]["direction_hist"] = {}
+    payload["calibration"]["dominant_directions"] = []
+    _set_snapshot(db, "empty_histogram", payload=json.dumps(payload))
+
+    snapshot, problem = repo.read_calibration_snapshot("empty_histogram")
+    assert problem is None
+    assert snapshot is not None
+
+    scene_body = client.get("/api/v1/sessions/empty_histogram/scene").json()
+    assert scene_body["calibration"]["available"] is True
+    assert scene_body["directions"]["histogram"] == {}
+
+
+@pytest.mark.parametrize("histogram", [
+    {"E": -0.1},
+    {"E": 1.1},
+    {"E": float("nan")},
+    {"E": float("inf")},
+    {"E": True},
+    {"E": "0.5"},
+    {"X": 0.5},
+    {"E": 1.0, "W": 1.0},
+])
+def test_snapshot_invalid_histogram_values_are_rejected(db, client,
+                                                        histogram):
+    save_session_to_db(make_result("bad_histogram_value", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_histogram_value")
+    payload["calibration"]["direction_hist"] = histogram
+    _set_snapshot(db, "bad_histogram_value", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_histogram_value", "histogram")
+
+
+@pytest.mark.parametrize("ready", [1, "true", None])
+def test_snapshot_ready_must_be_boolean(db, client, ready):
+    save_session_to_db(make_result("bad_ready", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_ready")
+    payload["calibration"]["ready"] = ready
+    _set_snapshot(db, "bad_ready", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_ready", "ready")
+
+
+@pytest.mark.parametrize("field", [
+    "n_samples", "n_tracks", "observed_seconds", "speed_p10",
+    "speed_mean", "speed_std", "moving_fraction",
+])
+def test_snapshot_negative_numeric_values_are_rejected(db, client, field):
+    save_session_to_db(make_result("bad_negative", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_negative")
+    payload["calibration"][field] = -1
+    _set_snapshot(db, "bad_negative", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_negative", field)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("observed_seconds", float("nan")),
+    ("speed_p50", float("inf")),
+    ("speed_p90", float("-inf")),
+])
+def test_snapshot_non_finite_numeric_values_are_rejected(db, client, field,
+                                                         value):
+    save_session_to_db(make_result("bad_nonfinite", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_nonfinite")
+    payload["calibration"][field] = value
+    _set_snapshot(db, "bad_nonfinite", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_nonfinite", field)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("n_samples", 10**12),
+    ("n_tracks", 10**12),
+    ("observed_seconds", 1e12),
+    ("speed_p10", 1e12),
+    ("moving_fraction", 1.1),
+])
+def test_snapshot_excessive_finite_numeric_values_are_rejected(db, client,
+                                                               field, value):
+    save_session_to_db(make_result("bad_excessive", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_excessive")
+    payload["calibration"][field] = value
+    _set_snapshot(db, "bad_excessive", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_excessive", field)
+
+
+def test_snapshot_exact_upper_numeric_boundaries_are_accepted(db, client):
+    save_session_to_db(make_result("upper_bounds", scene_stats=scene()))
+    payload = _stored_snapshot(db, "upper_bounds")
+    calibration = payload["calibration"]
+    calibration.update({
+        "n_samples": MAX_CALIBRATION_SAMPLES,
+        "n_tracks": MAX_CALIBRATION_TRACKS,
+        "observed_seconds": MAX_OBSERVED_SECONDS,
+        "speed_p10": MAX_SPEED_PX_S,
+        "speed_p50": MAX_SPEED_PX_S,
+        "speed_p90": MAX_SPEED_PX_S,
+        "speed_mean": MAX_SPEED_PX_S,
+        "speed_std": MAX_SPEED_PX_S,
+        "direction_hist": {"E": 0.0, "W": 1.0},
+        "dominant_directions": ["W"],
+        "moving_fraction": 1.0,
+    })
+    payload["parameters"] = {
+        "warmup_tracks": 100,
+        "tracks_seconds": 3600.0,
+        "min_samples": 100_000,
+        "direction_bin_deg": 180.0,
+    }
+    _set_snapshot(db, "upper_bounds", payload=json.dumps(payload))
+
+    snapshot, problem = repo.read_calibration_snapshot("upper_bounds")
+    assert problem is None
+    assert snapshot is not None
+
+    scene_body = client.get("/api/v1/sessions/upper_bounds/scene").json()
+    body = scene_body["calibration"]
+    assert body["available"] is True
+    assert body["samples"] == MAX_CALIBRATION_SAMPLES
+    assert body["tracks"] == MAX_CALIBRATION_TRACKS
+    assert body["observed_seconds"] == MAX_OBSERVED_SECONDS
+    assert body["parameters"] == payload["parameters"]
+
+    detail = client.get("/api/v1/sessions/upper_bounds").json()
+    assert detail["artifacts"]["scene_calibration"] is True
+
+
+@pytest.mark.parametrize("dominant", [
+    ["E", 1],
+    ["E", "N", "W"],
+    ["E", "E"],
+    ["E", "X"],
+])
+def test_snapshot_malformed_dominant_directions_are_rejected(db, client,
+                                                            dominant):
+    save_session_to_db(make_result("bad_dominant", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_dominant")
+    payload["calibration"]["dominant_directions"] = dominant
+    _set_snapshot(db, "bad_dominant", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_dominant", "dominant")
+
+
+@pytest.mark.parametrize("key", [
+    "warmup_tracks", "tracks_seconds", "min_samples", "direction_bin_deg",
+])
+def test_snapshot_parameters_require_known_keys(db, client, key):
+    save_session_to_db(make_result("missing_parameter", scene_stats=scene()))
+    payload = _stored_snapshot(db, "missing_parameter")
+    payload["parameters"].pop(key)
+    _set_snapshot(db, "missing_parameter", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "missing_parameter", key)
+
+
+def test_snapshot_parameters_reject_unexpected_keys(db, client):
+    save_session_to_db(make_result("extra_parameter", scene_stats=scene()))
+    payload = _stored_snapshot(db, "extra_parameter")
+    payload["parameters"]["future_flag"] = 1
+    _set_snapshot(db, "extra_parameter", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "extra_parameter", "unexpected")
+
+
+def test_snapshot_empty_parameters_are_rejected(db, client):
+    save_session_to_db(make_result("empty_parameters", scene_stats=scene()))
+    payload = _stored_snapshot(db, "empty_parameters")
+    payload["parameters"] = {}
+    _set_snapshot(db, "empty_parameters", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "empty_parameters", "parameters")
+
+
+@pytest.mark.parametrize("key,value", [
+    ("warmup_tracks", 0),
+    ("warmup_tracks", 101),
+    ("warmup_tracks", True),
+    ("warmup_tracks", 2.0),
+    ("warmup_tracks", "2"),
+    ("tracks_seconds", -1),
+    ("tracks_seconds", 3600.1),
+    ("tracks_seconds", True),
+    ("tracks_seconds", "12"),
+    ("min_samples", 0),
+    ("min_samples", 100_001),
+    ("min_samples", 30.0),
+    ("min_samples", False),
+    ("direction_bin_deg", 0),
+    ("direction_bin_deg", 180.1),
+    ("direction_bin_deg", True),
+    ("direction_bin_deg", "30"),
+])
+def test_snapshot_parameter_ranges_and_types_are_validated(db, client, key,
+                                                            value):
+    save_session_to_db(make_result("bad_parameter", scene_stats=scene()))
+    payload = _stored_snapshot(db, "bad_parameter")
+    payload["parameters"][key] = value
+    _set_snapshot(db, "bad_parameter", payload=json.dumps(payload))
+
+    _assert_snapshot_unavailable(client, "bad_parameter", key)
+
+
+@pytest.mark.parametrize("captured_ts", [
+    "not-a-timestamp",
+    "2026-11-09T00:00:04",       # ISO datetime without a timezone
+    "",
+])
+def test_snapshot_captured_timestamp_must_be_valid_iso(db, client,
+                                                       captured_ts):
+    save_session_to_db(make_result("bad_timestamp", scene_stats=scene()))
+    _set_snapshot(db, "bad_timestamp", captured_ts=captured_ts)
+
+    _assert_snapshot_unavailable(client, "bad_timestamp", "captured_ts")
+
+
+@pytest.mark.parametrize("captured_ts", [
+    "2026-11-09T00:00:04Z",
+    "2026-11-09T00:00:04-05:00",
+    "2026-11-09T00:00:04+05:30",
+])
+def test_snapshot_timezone_offset_timestamps_are_accepted(db, client,
+                                                          captured_ts):
+    save_session_to_db(make_result("offset_timestamp", scene_stats=scene()))
+    _set_snapshot(db, "offset_timestamp", captured_ts=captured_ts)
+
+    snapshot, problem = repo.read_calibration_snapshot("offset_timestamp")
+    assert problem is None
+    assert snapshot is not None
+    assert snapshot["captured_ts"] == captured_ts
+
+    scene_body = client.get("/api/v1/sessions/offset_timestamp/scene").json()
+    assert scene_body["calibration"]["available"] is True
+    assert scene_body["calibration"]["persisted"] is True
+    assert scene_body["calibration"]["captured_ts"] == captured_ts
+
+    detail = client.get("/api/v1/sessions/offset_timestamp").json()
+    assert detail["artifacts"]["scene_calibration"] is True
+
+    log = ResultLogger(db)
+    try:
+        assert log.get_calibration("offset_timestamp") == snapshot
+    finally:
+        log.close()
+
+
+def test_repository_and_logger_validate_snapshots_consistently(db):
+    save_session_to_db(make_result("consistent", scene_stats=scene()))
+    log = ResultLogger(db)
+    try:
+        assert (log.get_calibration("consistent")
+                == repo.calibration_snapshot("consistent"))
+
+        payload = _stored_snapshot(db, "consistent")
+        payload["calibration"]["ready"] = 1
+        _set_snapshot(db, "consistent", payload=json.dumps(payload))
+
+        stored, problem = repo.read_calibration_snapshot("consistent")
+        assert stored is None
+        assert "ready" in problem
+        assert log.get_calibration("consistent") is None
+    finally:
+        log.close()
+
+
 def test_legacy_database_without_snapshot_tables_reads_safely(db):
     conn = sqlite3.connect(db)
     try:
@@ -533,6 +1113,11 @@ def test_cli_completion_persists_and_is_api_readable(db, client,
     assert problem is None
     assert snapshot is not None
     assert snapshot["schema_version"] == CALIBRATION_SNAPSHOT_VERSION
+    logger = ResultLogger(db)
+    try:
+        assert logger.get_calibration(session) == snapshot
+    finally:
+        logger.close()
 
     detail = client.get(f"/api/v1/sessions/{session}").json()
     assert detail["artifacts"]["retained"] is False

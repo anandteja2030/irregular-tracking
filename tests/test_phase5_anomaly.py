@@ -24,12 +24,15 @@ def _snap(speed=50.0, direction=0.0, heading=None, accel=0.0, track_id=1):
 
 
 def _stats(mean=50.0, std=8.0, n=200, dirs=None, ready=True, dom=("E",)):
+    angles = {"E": 0.0, "NE": 45.0, "N": 90.0, "NW": 135.0,
+              "W": 180.0, "SW": 225.0, "S": 270.0, "SE": 315.0}
     return SceneStats(
         ready=ready, n_samples=n, n_tracks=3, observed_seconds=30.0,
         speed_p10=mean - 1.3 * std, speed_p50=mean, speed_p90=mean + 1.3 * std,
         speed_mean=mean, speed_std=std,
         direction_hist=dirs or {"E": 1.0},
-        dominant_directions=list(dom), moving_fraction=0.9)
+        dominant_directions=list(dom), moving_fraction=0.9,
+        dominant_angles=[angles[oct_] for oct_ in dom], flow_share=0.9)
 
 
 # ------------------------------------------------------------------ rules

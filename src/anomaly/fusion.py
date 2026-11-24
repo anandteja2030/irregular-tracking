@@ -28,7 +28,7 @@ LEVEL_IRREGULAR = "Irregular"
 
 @dataclass
 class AnomalyVerdict:
-    """Everything downstream consumers (viz, logs, dashboard) need."""
+    """Everything downstream consumers (viz, logs, API/console) need."""
     level: str                     # Normal / Suspicious / Irregular
     fused_score: float             # 0..1
     signal_score: float            # rule aggregate

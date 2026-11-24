@@ -127,7 +127,9 @@ class RuleModel(BaseModel):
     speed_pctl_slow: float = Field(ge=0, le=1)
     max_z: float = Field(gt=0, le=20)
     loiter_seconds: float = Field(ge=0, le=3600)
+    loiter_stationary_factor: float = Field(gt=0, le=10)
     direction_dev_deg: float = Field(gt=0, le=180)
+    flow_tolerance_deg: float = Field(gt=0, le=180)
 
     @model_validator(mode="after")
     def _percentile_order(self) -> "RuleModel":

@@ -1,15 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ResourceState } from "../hooks/useResource";
-import type { AnomalyItem, MediaResponse } from "../lib/types";
-import { mediaUrl } from "../lib/api";
+import { useResource } from "../hooks/useResource";
+import type {
+  AnomalyItem,
+  MediaResponse,
+  TrackItem,
+  TrajectoryPoint,
+} from "../lib/types";
+import { api, mediaUrl } from "../lib/api";
 import { stepPreviewFrame } from "../lib/studio";
-import { nearestFrame } from "../lib/tracks";
+import { classLabel, nearestFrame } from "../lib/tracks";
+import { ruleLabel } from "../lib/anomalies";
 import { formatClock, formatNumber } from "../lib/format";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { LevelBadge, Score } from "./SessionBits";
-import { AnomalyIcon, ImageIcon, RefreshIcon } from "./icons";
+import { ImageIcon, RefreshIcon } from "./icons";
 
 type Kind = "annotated" | "original";
+
+export interface FrameSessionContext {
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  thresholds: { suspicious: number | null; irregular: number | null };
+}
 
 interface FrameInvestigatorProps {
   sessionId: string | null;
@@ -18,9 +32,178 @@ interface FrameInvestigatorProps {
   eventTotal: number;
   eventsReady: boolean;
   eventsError?: boolean;
+  /** Track aggregates, used for the object's recognised class and averages. */
+  tracks?: TrackItem[];
+  /** Frame geometry and bands, so the reading can name the band and position. */
+  context?: FrameSessionContext;
   /** Optional external request: jump to this source frame when a retained
    * preview exists, otherwise to the nearest retained one. */
   focusFrame?: number | null;
+  /** The event the user selected; its reading stays visible when the retained
+   * preview is only the nearest frame to the event's own frame. */
+  focusEvent?: AnomalyItem | null;
+}
+
+function regionOf(
+  x: number,
+  y: number,
+  width: number | null,
+  height: number | null,
+): string | null {
+  if (!width || !height || width <= 0 || height <= 0) return null;
+  const column = Math.min(2, Math.max(0, Math.floor((x / width) * 3)));
+  const row = Math.min(2, Math.max(0, Math.floor((y / height) * 3)));
+  const rows = ["top", "middle", "bottom"] as const;
+  const columns = ["left", "centre", "right"] as const;
+  return `${rows[row]}-${columns[column]}`;
+}
+
+function framePoint(points: TrajectoryPoint[], frame: number): TrajectoryPoint | null {
+  let best: TrajectoryPoint | null = null;
+  for (const point of points) {
+    if (point.frame > frame) break;
+    if (point.x === null || point.y === null) continue;
+    best = point;
+  }
+  return best;
+}
+
+/** One plain-language reading of a single event on the shown frame: what
+ * changed, where it happened, how it was measured and why it carries that
+ * level. Every sentence is built from persisted fields or retained points. */
+function FrameEventReading({
+  event,
+  previous,
+  track,
+  points,
+  context,
+}: {
+  event: AnomalyItem;
+  previous: AnomalyItem | null;
+  track: TrackItem | null;
+  points: TrajectoryPoint[];
+  context?: FrameSessionContext;
+}) {
+  const className =
+    classLabel(track?.appearance ?? event.evidence.appearance ?? { color: null, shape: null }) ??
+    null;
+  const point = event.frame !== null ? framePoint(points, event.frame) : null;
+  const earlierPoint =
+    point === null
+      ? null
+      : [...points]
+          .reverse()
+          .find(
+            (candidate) =>
+              candidate.frame < (point.frame ?? 0) && candidate.x !== null && candidate.y !== null,
+          ) ?? null;
+  const moved =
+    point && earlierPoint && point.x !== null && point.y !== null &&
+    earlierPoint.x !== null && earlierPoint.y !== null
+      ? Math.hypot(point.x - earlierPoint.x, point.y - earlierPoint.y)
+      : null;
+  const region =
+    point && point.x !== null && point.y !== null
+      ? regionOf(point.x, point.y, context?.width ?? null, context?.height ?? null)
+      : null;
+
+  let where =
+    "No retained centroid for this frame; the boxed object in the annotated image is the engine's own detection.";
+  if (point && point.x !== null && point.y !== null) {
+    const relative =
+      context?.width && context?.height
+        ? `${Math.round((point.x / context.width) * 100)}% across, ${Math.round(
+            (point.y / context.height) * 100,
+          )}% down`
+        : "frame size not recorded";
+    where = `${region ? `${region} of the frame` : "measured position"} — ${relative} (source pixels ${point.x.toFixed(
+      0,
+    )} × ${point.y.toFixed(0)})`;
+  }
+
+  const what: string[] = [];
+  if (previous) {
+    if (event.scores.fused !== null && previous.scores.fused !== null) {
+      const delta = event.scores.fused - previous.scores.fused;
+      what.push(
+        `fused score ${delta >= 0 ? "rose" : "fell"} ${Math.abs(delta).toFixed(2)} from ${previous.scores.fused.toFixed(2)} at F${previous.frame}`,
+      );
+    }
+    if (event.motion.speed_px_s !== null && previous.motion.speed_px_s !== null) {
+      const delta = event.motion.speed_px_s - previous.motion.speed_px_s;
+      what.push(
+        `speed ${delta >= 0 ? "increased" : "dropped"} by ${Math.abs(delta).toFixed(0)} px/s from ${previous.motion.speed_px_s.toFixed(0)} px/s`,
+      );
+    }
+  } else {
+    what.push("first elevated observation of this object, so there is no earlier event to compare");
+  }
+  if (track?.motion.mean_speed_px_s != null && event.motion.speed_px_s !== null) {
+    const ratio = event.motion.speed_px_s / Math.max(track.motion.mean_speed_px_s, 1);
+    what.push(
+      `this frame is ${ratio.toFixed(1)}× the object's own mean speed (${track.motion.mean_speed_px_s.toFixed(0)} px/s)`,
+    );
+  }
+  if (moved !== null && point) {
+    what.push(`moved ${moved.toFixed(0)} px since F${earlierPoint?.frame ?? "—"}`);
+  }
+
+  const ruleEvidence = (event.evidence?.rules ?? []).filter((rule) => rule.rule);
+  const how =
+    ruleEvidence.length > 0
+      ? ruleEvidence
+          .map(
+            (rule) =>
+              `${ruleLabel(rule.rule)}${
+                typeof rule.severity === "number" ? ` · ${rule.severity.toFixed(2)}` : ""
+              }`,
+          )
+          .join(" · ")
+      : "No rule fired";
+
+  const fused = event.scores.fused;
+  const irregular = context?.thresholds.irregular ?? null;
+  const suspicious = context?.thresholds.suspicious ?? null;
+  let band = "Fused score not recorded, so no band comparison is claimed.";
+  if (fused !== null && irregular !== null && suspicious !== null) {
+    band =
+      fused >= irregular
+        ? `Fused ${fused.toFixed(2)} is at or above the Irregular cut-off (${irregular.toFixed(2)}).`
+        : fused >= suspicious
+          ? `Fused ${fused.toFixed(2)} is between the Suspicious cut-off (${suspicious.toFixed(2)}) and the Irregular cut-off (${irregular.toFixed(2)}).`
+          : `Fused ${fused.toFixed(2)} is below the Suspicious cut-off (${suspicious.toFixed(2)}).`;
+  }
+
+  return (
+    <article className={`frame-reading__card frame-reading__card--${event.level.toLowerCase()}`}>
+      <header className="frame-reading__head">
+        <LevelBadge level={event.level} />
+        <span className="mono">E{event.event_id}</span>
+        <span className="mono">T{String(event.track_id).padStart(2, "0")}</span>
+        {className && <span className="frame-reading__class">{className}</span>}
+        <Score value={event.scores.fused} />
+      </header>
+
+      <dl className="frame-reading__grid">
+        <div>
+          <dt>What changed</dt>
+          <dd>{what.join("; ")}.</dd>
+        </div>
+        <div>
+          <dt>Where</dt>
+          <dd>{where}</dd>
+        </div>
+        <div>
+          <dt>How it was measured</dt>
+          <dd>{how}</dd>
+        </div>
+        <div>
+          <dt>Why this level</dt>
+          <dd>{band}</dd>
+        </div>
+      </dl>
+    </article>
+  );
 }
 
 /**
@@ -34,7 +217,10 @@ export function FrameInvestigator({
   eventsReady,
   eventsError = false,
   eventTotal,
+  tracks = [],
+  context,
   focusFrame,
+  focusEvent = null,
 }: FrameInvestigatorProps) {
   const [index, setIndex] = useState(0);
   const [kind, setKind] = useState<Kind>("annotated");
@@ -85,6 +271,55 @@ export function FrameInvestigator({
     ? (events ?? []).filter((event) => event.frame === frame.frame)
     : [];
   const loadedEvents = events?.length ?? 0;
+  const trackById = useMemo(
+    () => new Map(tracks.map((track) => [track.track_id, track])),
+    [tracks],
+  );
+  // A retained preview set is decimated, so the selected event's exact frame
+  // is often not retained. In that case the nearest retained preview is shown
+  // and the selected event's own reading stays beside it, labelled honestly.
+  const nearestFocus =
+    focusEvent &&
+    frame &&
+    frameEvents.length === 0 &&
+    Math.abs(frame.frame - focusEvent.frame) <=
+      Math.max(1, media.data?.preview_stride ?? 1)
+      ? focusEvent
+      : null;
+  const readingEvents = frameEvents.length > 0 ? frameEvents : nearestFocus ? [nearestFocus] : [];
+  const previousByTrack = useMemo(() => {
+    const map = new Map<number, AnomalyItem>();
+    const reference = readingEvents.length > 0 ? readingEvents[0].frame : (frame?.frame ?? 0);
+    for (const event of events ?? []) {
+      if (event.frame >= reference) continue;
+      const current = map.get(event.track_id);
+      if (!current || event.frame > current.frame) map.set(event.track_id, event);
+    }
+    return map;
+    // readingEvents derives from events, frame and focusEvent
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, frame?.frame, focusEvent?.event_id]);
+
+  const frameTrackIds = [...new Set(readingEvents.map((event) => event.track_id))].slice(0, 4);
+  const frameTrackKey = frameTrackIds.join(",");
+  const trajectories = useResource(
+    async (signal) => {
+      const settled = await Promise.allSettled(
+        frameTrackIds.map((trackId) =>
+          api.trackTrajectory(sessionId as string, trackId, signal),
+        ),
+      );
+      const map: Record<number, TrajectoryPoint[]> = {};
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") map[frameTrackIds[index]] = result.value.points;
+      });
+      return map;
+    },
+    {
+      enabled: Boolean(sessionId) && frameTrackIds.length > 0,
+      key: `${sessionId ?? "none"}:${frame?.frame ?? "none"}:${frameTrackKey}`,
+    },
+  );
 
   return (
     <div className="investigator">
@@ -132,6 +367,8 @@ export function FrameInvestigator({
                 <img
                   src={src as string}
                   alt={`${kind === "annotated" ? "Annotated" : "Original"} preview frame ${frame.frame}`}
+                  loading="lazy"
+                  decoding="async"
                   onError={() => setBroken(src)}
                 />
               )}
@@ -201,13 +438,36 @@ export function FrameInvestigator({
             </div>
 
             {focusNote && <p className="hint hint--focus">{focusNote}</p>}
-            <p className="hint">
-              {media.data?.preview_stride
-                ? `One frame in every ${media.data.preview_stride} is retained (${formatNumber(media.data.preview_count)} frames). Arrow keys step through the retained set.`
-                : "Only the retained preview set is available."}{" "}
-              Bounding boxes and track IDs are drawn into the annotated JPEG by the pipeline; the browser adds
-              no overlay.
-            </p>
+
+            <section className="frame-reading" aria-labelledby="frame-reading-title">
+              <div className="frame-reading__head-row">
+                <span className="note__label" id="frame-reading-title">
+                  What this frame shows
+                </span>
+                <span className="tag">
+                  F{frame.frame} · {readingEvents.length} elevation reading
+                  {readingEvents.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {readingEvents.length === 0 ? (
+                <p className="hint hint--flush">No elevated event on F{frame.frame}.</p>
+              ) : (
+                <>
+                  <div className="frame-reading__list">
+                    {readingEvents.map((event) => (
+                      <FrameEventReading
+                        key={event.event_id}
+                        event={event}
+                        previous={previousByTrack.get(event.track_id) ?? null}
+                        track={trackById.get(event.track_id) ?? null}
+                        points={trajectories.data?.[event.track_id] ?? []}
+                        context={context}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
           </>
         ) : null}
       </div>
@@ -235,9 +495,6 @@ export function FrameInvestigator({
                     <span className="mono">T{String(event.track_id).padStart(2, "0")}</span>
                     <Score value={event.scores.fused} />
                   </div>
-                  <p className="event-mini__summary" title={event.summary}>
-                    {event.summary}
-                  </p>
                   {event.evidence?.rules?.length ? (
                     <p className="event-mini__rules mono">
                       {event.evidence.rules.map((rule) => rule.rule).join(" · ")}
@@ -262,26 +519,6 @@ export function FrameInvestigator({
         </div>
 
         <div className="investigator__notes">
-          <span className="note__label">
-            <AnomalyIcon width={11} height={11} /> Media scope
-          </span>
-          {media.data?.available ? (
-            <>
-              <p className="note__body">{media.data.annotated_video.reason}</p>
-              {media.data.notes.length > 0 && (
-                <ul className="note-list">
-                  {media.data.notes.map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : (
-            <p className="note__body">
-              Frame retention is scoped to this API process; the empty state above carries the reason the
-              API returned.
-            </p>
-          )}
           <button type="button" className="btn btn--quiet btn--sm" onClick={media.reload}>
             <span className="btn__icon">
               <RefreshIcon width={12} height={12} />

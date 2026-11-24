@@ -16,6 +16,8 @@ import { AnomalyLedger } from "../components/AnomalyLedger";
 import { AnomalyDetailPanel } from "../components/AnomalyDetailPanel";
 import { FrameInvestigator } from "../components/FrameInvestigator";
 import { SectionHeader } from "../components/SectionHeader";
+import { LevelPlaybook, QuantumHero } from "../components/quantum";
+import { ObjectRegistry } from "../components/ObjectRegistry";
 
 const FETCH_CHUNK = 500;
 const MAX_EVENTS = 5_000;
@@ -142,7 +144,7 @@ export function AnomalyCenterPage() {
       <PageHeader
         eyebrow="Fusion intelligence"
         title="Anomaly Intelligence Center"
-        lede="A persisted event ledger, severity timeline and evidence investigation built from the engine's fused scores. Missing evidence stays missing; no event, timestamp or explanation is synthesized."
+        lede="The persisted event ledger, severity timeline and frame evidence for every elevated observation."
         aside={
           selected ? (
             <span className="pill pill--accent mono">
@@ -165,6 +167,89 @@ export function AnomalyCenterPage() {
         </Panel>
       ) : (
         <>
+          <QuantumHero
+            kicker="Fusion core · anomaly intelligence"
+            title={
+              <>
+                Fused scores, <em>explained</em>
+              </>
+            }
+            description="Rule findings, the Isolation Forest and scene deviation fused into one score per observation."
+            status={
+              summary.data
+                ? `${formatNumber(summary.data.counts.anomalies)} elevated events`
+                : "Reading the fused ledger"
+            }
+            metrics={[
+              {
+                label: "Observations",
+                value: formatNumber(summary.data?.counts.observations),
+              },
+              {
+                label: "Elevated",
+                value: formatNumber(summary.data?.counts.anomalies),
+                tone: "warn",
+              },
+              {
+                label: "Objects affected",
+                value: `${formatNumber(summary.data?.anomalies.tracks_affected)} / ${formatNumber(
+                  summary.data?.counts.tracks,
+                )}`,
+                tone: "bad",
+              },
+              {
+                label: "Mean fused",
+                value:
+                  summary.data?.anomalies.score_mean === null ||
+                  summary.data?.anomalies.score_mean === undefined
+                    ? "—"
+                    : summary.data.anomalies.score_mean.toFixed(2),
+                tone: "accent",
+              },
+              {
+                label: "Peak fused",
+                value:
+                  summary.data?.anomalies.score_max === null ||
+                  summary.data?.anomalies.score_max === undefined
+                    ? "—"
+                    : summary.data.anomalies.score_max.toFixed(2),
+              },
+            ]}
+          />
+
+          <section className="section" aria-labelledby="anomaly-playbook-title">
+            <SectionHeader
+              id="anomaly-playbook-title"
+              title="What each level means here"
+              level={3}
+              meta="Fused thresholds · running engine configuration"
+            />
+            <Panel title="Level playbook" sub="Normal is still a tracked object — it is simply inside the baseline">
+              <LevelPlaybook
+                levels={summary.data?.counts.levels}
+                thresholds={{
+                  suspicious: config.data?.anomaly?.threshold_suspicious ?? null,
+                  irregular: config.data?.anomaly?.threshold_irregular ?? null,
+                }}
+              />
+            </Panel>
+          </section>
+
+          <section className="section" aria-label="Tracked objects behind these events">
+            <ObjectRegistry
+              tracks={tracks.data?.tracks ?? []}
+              total={tracks.data?.total ?? 0}
+              sessionId={selectedId}
+              title="Tracked objects behind these events"
+              sub="Every identity in the run · status from its worst measured fused level"
+              events={events.data?.rows ?? null}
+              thresholds={{
+                suspicious: config.data?.anomaly?.threshold_suspicious ?? null,
+                irregular: config.data?.anomaly?.threshold_irregular ?? null,
+              }}
+            />
+          </section>
+
           <AnomalySummary
             sessionId={selectedId}
             summary={summary}
@@ -175,8 +260,6 @@ export function AnomalyCenterPage() {
             eventsStatus={events.status}
             eventsError={events.error}
             reloadEvents={events.reload}
-            eventsTotal={data?.total ?? 0}
-            truncated={data?.truncated ?? false}
           />
 
           <section className="section">
@@ -256,7 +339,18 @@ export function AnomalyCenterPage() {
                   eventsReady={events.status === "ready" || events.status === "error"}
                   eventsError={events.status === "error"}
                   eventTotal={data?.total ?? 0}
+                  tracks={tracks.data?.tracks ?? []}
+                  context={{
+                    width: selected?.processing.width ?? null,
+                    height: selected?.processing.height ?? null,
+                    fps: selected?.processing.fps ?? null,
+                    thresholds: {
+                      suspicious: config.data?.anomaly?.threshold_suspicious ?? null,
+                      irregular: config.data?.anomaly?.threshold_irregular ?? null,
+                    },
+                  }}
                   focusFrame={selectedEvent?.frame ?? null}
+                  focusEvent={selectedEvent}
                 />
               </div>
             </Panel>

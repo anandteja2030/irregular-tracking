@@ -1,9 +1,9 @@
 # NEURAL COMMAND console (Phase 5 foundation)
 
 React + TypeScript shell for the surveillance intelligence console. It is
-deliberately isolated from the Python engine: no source file under `src/`,
-`config/` or `tests/` was changed for it, and Streamlit remains the working
-interface during the migration.
+deliberately isolated from the Python engine: it talks to the FastAPI service
+through `/api/v1` and never imports engine code. The console is the
+application's only UI; the former Streamlit dashboard has been removed.
 
 ## Run
 
@@ -57,6 +57,7 @@ Read-only calls only, through the versioned mirror:
 | Command Overview, rail, top bar | `GET /api/v1/health` |
 | Command Overview, System Settings | `GET /api/v1/system` |
 | Command Overview, Video Studio | `GET /api/v1/sources` |
+| Video Studio (live camera) | `POST /api/v1/live/sessions`, `/sessions/{live_id}/frames`, `/stop`, `/cancel` |
 | Video Studio, Anomaly Center, Scene, Settings | `GET /api/v1/config` |
 | Session switcher, Overview ledger | `GET /api/v1/sessions` |
 | Track Explorer | `GET /api/v1/sessions/{id}/tracks`, `/tracks/{track}`, `/tracks/{track}/trajectory`, `/tracks/{track}/observations` |

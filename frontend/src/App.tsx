@@ -11,6 +11,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
+import { CommandRail } from "./components/CommandRail";
 import { ApiHealthProvider } from "./app/ApiHealthProvider";
 import { SessionProvider } from "./app/SessionProvider";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -56,6 +57,7 @@ function ShellLayout() {
       <Sidebar />
       <div className="shell">
         <TopBar onOpenPalette={() => setPaletteOpen(true)} />
+        <CommandRail />
         <main className="workspace" id="workspace" tabIndex={-1}>
           <div className="workspace__inner" key={pathname}>
             <ErrorBoundary>

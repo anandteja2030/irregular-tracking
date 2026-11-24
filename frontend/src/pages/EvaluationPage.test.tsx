@@ -214,6 +214,66 @@ function mockFetch(
         }),
       );
     }
+    if (url.includes("/tracks?")) {
+      return Promise.resolve(
+        json({
+          total: 2,
+          count: 2,
+          limit: 500,
+          offset: 0,
+          tracks: [
+            {
+              track_id: 1,
+              appearance: { color: "red", shape: null },
+              frames: { first: 0, last: 20, summary_first: 0, summary_last: 20 },
+              observed: {
+                observations: 20,
+                anomalies: 3,
+                levels: { Normal: 17, Suspicious: 2, Irregular: 1 },
+                worst_level: "Irregular",
+                duration_s: 2,
+              },
+              motion: {
+                mean_speed_px_s: 10,
+                max_speed_px_s: 40,
+                path_length_px: 400,
+                straightness: 0.9,
+                n_points: 20,
+                n_seconds: 2,
+                summary_directions: ["E"],
+                max_fused_score: 0.81,
+                speed_source: "measured",
+              },
+              timestamps: { first_ts: null, last_ts: null },
+            },
+            {
+              track_id: 2,
+              appearance: { color: "green", shape: null },
+              frames: { first: 0, last: 20, summary_first: 0, summary_last: 20 },
+              observed: {
+                observations: 20,
+                anomalies: 0,
+                levels: { Normal: 20, Suspicious: 0, Irregular: 0 },
+                worst_level: "Normal",
+                duration_s: 2,
+              },
+              motion: {
+                mean_speed_px_s: 5,
+                max_speed_px_s: 9,
+                path_length_px: 100,
+                straightness: 1,
+                n_points: 20,
+                n_seconds: 2,
+                summary_directions: ["E"],
+                max_fused_score: 0.12,
+                speed_source: "measured",
+              },
+              timestamps: { first_ts: null, last_ts: null },
+            },
+          ],
+        }),
+      );
+    }
     const match = url.match(/\/sessions\/([^/]+)\/evaluation$/);
     if (match) {
       if (options.evaluationFailure) {
@@ -252,10 +312,10 @@ describe("evaluation and reports", () => {
     expect(
       (await screen.findByRole("heading", { level: 1 })).textContent,
     ).toBe("Evaluation & Reports");
-    expect(await screen.findByText("Accuracy")).toBeTruthy();
-    expect(screen.getByText("75.0%")).toBeTruthy();
-    expect(screen.getAllByText("66.7%")).toHaveLength(3); // precision, recall, F1
-    expect(screen.getByText("20.0%")).toBeTruthy(); // false positive rate
+    expect((await screen.findAllByText("Accuracy")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("75.0%")).toHaveLength(2); // metric card + comparison bar
+    expect(screen.getAllByText("66.7%")).toHaveLength(6); // precision, recall, F1
+    expect(screen.getAllByText("20.0%")).toHaveLength(2); // false positive rate
     expect(screen.getByText("Confusion matrix")).toBeTruthy();
 
     const table = screen.getByRole("table", { name: "Confusion matrix" });
@@ -335,7 +395,7 @@ describe("evaluation and reports", () => {
     mockFetch();
     renderPage();
 
-    await screen.findByText("Accuracy");
+    await screen.findAllByText("Accuracy");
     fireEvent.click(screen.getByRole("button", { name: "Download Event observations" }));
     expect(await screen.findByText(/Downloaded 2 rows/)).toBeTruthy();
     expect(screen.getByText("saved")).toBeTruthy();
@@ -354,7 +414,7 @@ describe("evaluation and reports", () => {
     mockFetch({ reportFailure: true });
     renderPage();
 
-    await screen.findByText("Accuracy");
+    await screen.findAllByText("Accuracy");
     fireEvent.click(screen.getByRole("button", { name: "Download Session report" }));
 
     expect(await screen.findByRole("alert")).toHaveProperty(
@@ -370,7 +430,7 @@ describe("evaluation and reports", () => {
     mockFetch();
     renderPage(LABELED);
 
-    await screen.findByText("Accuracy");
+    await screen.findAllByText("Accuracy");
     expect(screen.getByLabelText("Evaluation session")).toHaveProperty("value", LABELED);
 
     fireEvent.change(screen.getByLabelText("Evaluation session"), {
@@ -385,7 +445,7 @@ describe("evaluation and reports", () => {
     fireEvent.change(screen.getByLabelText("Evaluation session"), {
       target: { value: LABELED },
     });
-    expect(await screen.findByText("Accuracy")).toBeTruthy();
+    expect((await screen.findAllByText("Accuracy")).length).toBeGreaterThan(0);
     expect(screen.queryByText("No ground-truth labels")).toBeNull();
   });
 
@@ -403,7 +463,7 @@ describe("evaluation and reports", () => {
     mockFetch();
     renderPage();
 
-    await screen.findByText("Accuracy");
+    await screen.findAllByText("Accuracy");
 
     const hero = document.querySelector(".eval-hero") as HTMLElement;
     expect(hero.dataset.tone).toBe("ok");

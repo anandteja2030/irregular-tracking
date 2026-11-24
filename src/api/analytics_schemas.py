@@ -201,6 +201,7 @@ class Appearance(BaseModel):
 
     color: str | None
     shape: str | None
+    class_name: str | None = None
 
 
 class TrackFrames(BaseModel):
@@ -434,6 +435,7 @@ class AnomalyTrackContext(BaseModel):
     track_id: int
     color: str | None
     shape: str | None
+    class_name: str | None = None
     observations: int
     anomalies: int
     worst_level: str

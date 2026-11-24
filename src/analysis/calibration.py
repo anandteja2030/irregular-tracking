@@ -26,6 +26,15 @@ import numpy as np
 from config.config import CalibrationConfig, load_config
 from src.analysis.features import MovementSnapshot, _octant
 
+# Heading (degrees, image convention) at the centre of each octant label.
+OCTANT_ANGLES = {"E": 0.0, "NE": 45.0, "N": 90.0, "NW": 135.0,
+                 "W": 180.0, "SW": 225.0, "S": 270.0, "SE": 315.0}
+
+
+def _angle_gap(a: float, b: float) -> float:
+    """Shortest absolute difference between two bearings, in degrees."""
+    return abs((a - b + 540.0) % 360.0 - 180.0)
+
 
 @dataclass
 class SceneStats:
@@ -42,6 +51,8 @@ class SceneStats:
     direction_hist: dict                 # octant -> fraction (0..1)
     dominant_directions: list[str]       # top octant labels (>= 20% share)
     moving_fraction: float               # share of observations with speed > 0
+    dominant_angles: list[float] = field(default_factory=list)  # octant centres
+    flow_share: float = 0.0              # share of motion in dominant octants
 
 
 class ScenarioCalibrator:
@@ -87,10 +98,10 @@ class ScenarioCalibrator:
             oct_: round(cnt / total_dir, 4)
             for oct_, cnt in sorted(self._direction_counts.items())
         }
-        dominant = [
-            oct_ for oct_, share in sorted(hist.items(), key=lambda kv: -kv[1])
-            if share >= 0.20
-        ][-2:]      # keep at most 2
+        dominant = [oct_ for oct_, share in sorted(hist.items(), key=lambda kv: -kv[1])
+                    if share >= 0.20][:2]          # at most the two strongest
+        dominant_angles = [OCTANT_ANGLES[oct_] for oct_ in dominant]
+        flow_share = round(sum(hist.get(oct_, 0.0) for oct_ in dominant), 4)
         return SceneStats(
             ready=self.is_ready(),
             n_samples=self.observation_count(),
@@ -104,6 +115,8 @@ class ScenarioCalibrator:
             direction_hist=hist,
             dominant_directions=dominant,
             moving_fraction=round(self._movement_frames / max(self._total_frames, 1), 4),
+            dominant_angles=dominant_angles,
+            flow_share=flow_share,
         )
 
     # --------------------------------------------- scene-relative scoring
@@ -131,14 +144,20 @@ class ScenarioCalibrator:
                 score += 0.2
                 notes.append("much slower than the scene's norm")
 
-        if snapshot.direction_deg is not None and stats.direction_hist:
-            oct_ = _octant(snapshot.direction_deg)
-            share = stats.direction_hist.get(oct_, 0.0)
-            if stats.dominant_directions and oct_ not in stats.dominant_directions:
+        if snapshot.direction_deg is not None and stats.dominant_angles:
+            # A flow covers a range of headings: a car on a bridge drifts 20-40
+            # degrees off the lane axis without leaving the flow. Compare the
+            # angle to the dominant headings with a tolerance instead of
+            # demanding the exact octant.
+            deviation = min(_angle_gap(snapshot.direction_deg, angle)
+                            for angle in stats.dominant_angles)
+            tolerance = load_config().anomaly.rule.flow_tolerance_deg
+            if stats.flow_share >= 0.30 and deviation > tolerance:
                 score += 0.3
-                notes.append(f"moves {oct_} against dominant scene flow {stats.dominant_directions}")
-            elif share < 0.08:
+                notes.append(f"heading {deviation:.0f} deg off the dominant "
+                             f"scene flow ({stats.dominant_directions})")
+            elif deviation > tolerance + 45:
                 score += 0.15
-                notes.append("direction seen rarely in this scene")
+                notes.append("heading rarely seen in this scene")
 
         return min(score, 1.0), "; ".join(notes) if notes else "movement matches scene baseline"

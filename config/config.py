@@ -53,6 +53,28 @@ class ColorDetectionConfig:
 
 
 @dataclass
+class DetectorConfig:
+    """Pretrained COCO object detector (YOLOv4-tiny through OpenCV DNN).
+
+    `classes` is the allow-list of real objects worth tracking. Everything the
+    model knows but a surveillance scene does not care about (frisbees, cups,
+    traffic lights) is dropped instead of becoming a track.
+    """
+    enabled: bool = True
+    model_dir: Path = PROJECT_ROOT / "models"
+    weights: str = "yolov4-tiny.weights"
+    config_file: str = "yolov4-tiny.cfg"
+    names_file: str = "coco.names"
+    confidence: float = 0.40       # minimum detector confidence
+    nms_iou: float = 0.45          # overlap above this merges duplicate boxes
+    input_size: int = 416          # network input resolution
+    min_box_px: int = 24           # reject boxes smaller than this per side
+    max_box_fraction: float = 0.60  # reject a single box covering most frames
+    max_detections: int = 40
+    classes: tuple = ("person", "bicycle", "car", "motorcycle", "bus", "truck")
+
+
+@dataclass
 class ShapeDetectionConfig:
     epsilon_factor: float = 0.02        # approxPolyDP epsilon = factor * perimeter
     min_rotation_lock_aspect: float = 0.15   # |1-aspect| beyond this => non-square
@@ -98,16 +120,20 @@ class RuleConfig:
     speed_pctl_fast: float = 0.90    # > p90 of calibrated speed distribution => fast rule
     speed_pctl_slow: float = 0.10
     max_z: float = 3.0               # z-score cap per rule evidence
-    loiter_seconds: float = 2.0
+    loiter_seconds: float = 3.0
+    loiter_stationary_factor: float = 1.5  # net move < this x object size => loitering
     direction_dev_deg: float = 45.0  # past this angle off dominant flow => direction rule
+    flow_tolerance_deg: float = 70.0  # heading within this of a dominant flow is normal
 
 
 @dataclass
 class AnomalyConfig(MLAnomalyConfig):
     rule: RuleConfig = field(default_factory=RuleConfig)
     weights: dict = field(default_factory=lambda: {"rule": 0.45, "ml": 0.35, "scene": 0.20})
-    threshold_suspicious: float = 0.35
-    threshold_irregular: float = 0.65
+    # Fused score bands. Two independent signals are needed for Suspicious,
+    # so a single noisy observation cannot colour a normal object.
+    threshold_suspicious: float = 0.40
+    threshold_irregular: float = 0.75
 
 
 @dataclass
@@ -141,6 +167,7 @@ class Settings:
     video: VideoConfig = field(default_factory=VideoConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     color: ColorDetectionConfig = field(default_factory=ColorDetectionConfig)
+    detector: DetectorConfig = field(default_factory=DetectorConfig)
     shape: ShapeDetectionConfig = field(default_factory=ShapeDetectionConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)

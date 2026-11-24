@@ -177,9 +177,14 @@ class TrajectoryFeatures:
 
     @staticmethod
     def from_track(trajectory: list[tuple[int, float, float]], fps: float,
-                   track_id: int = 0) -> TrajectoryStats | None:
+                   track_id: int = 0,
+                   min_positions: int | None = None) -> TrajectoryStats | None:
+        """Aggregate a trajectory; `min_positions` defaults to the configured
+        minimum. End-of-run summaries pass a lower floor so a short but real
+        track still persists its class, speeds and frame range."""
         cfg = load_config().features
-        if len(trajectory) < cfg.traj_min_positions:
+        floor = cfg.traj_min_positions if min_positions is None else min_positions
+        if len(trajectory) < max(2, floor):
             return None
         frames = np.array([p[0] for p in trajectory], float)
         pts = np.array([(p[1], p[2]) for p in trajectory], float)

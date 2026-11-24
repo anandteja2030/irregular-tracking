@@ -5,7 +5,7 @@ Run locally:
 
 Phase 1 exposes only the foundation - health, system status, configuration and
 bundled sources. Analysis jobs, uploads, sessions and media arrive in later
-phases; the computer-vision engine and the Streamlit UI are untouched.
+phases; the computer-vision engine and its API are untouched.
 
 Endpoints are documented at the root (`/health`, `/system`, `/config`,
 `/sources`) and mirrored under `/api/v1/...` for the future React client. The
@@ -32,10 +32,13 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.api import API_VERSION
+from src.api.middleware import RequestBodyLimitMiddleware
+from src.api.routes import admin as admin_routes
 from src.api.routes import anomalies as anomaly_routes
 from src.api.routes import config as config_routes
 from src.api.routes import evaluation as evaluation_routes
 from src.api.routes import jobs as job_routes
+from src.api.routes import live as live_routes
 from src.api.routes import media as media_routes
 from src.api.routes import scene as scene_routes
 from src.api.routes import sessions as session_routes
@@ -53,6 +56,8 @@ _TAGS_METADATA = [
     {"name": "sources", "description": "Bundled sample footage with real metadata."},
     {"name": "videos", "description": "Validated video uploads."},
     {"name": "jobs", "description": "Background analysis jobs and progress."},
+    {"name": "live", "description": "Live webcam capture: per-frame tracking and "
+                                "stopping a capture into a persisted session."},
     {"name": "sessions", "description": "Persisted sessions: metadata, counts, summary."},
     {"name": "tracks", "description": "Tracked objects, observations and trajectories."},
     {"name": "anomalies", "description": "Suspicious/Irregular events and evidence."},
@@ -66,6 +71,7 @@ _TAGS_METADATA = [
 async def _lifespan(app: FastAPI):
     """Sweep expired uploads on start; cancel active jobs on shutdown."""
     from src.api.jobs import manager
+    from src.api.live import manager as live_manager
     from src.api.uploads import cleanup_stale
     try:
         cleanup_stale(active_refs=manager.active_upload_refs())
@@ -73,6 +79,7 @@ async def _lifespan(app: FastAPI):
         pass
     yield
     manager.cancel_all()
+    live_manager.cancel_all()
     manager.wait_idle(timeout=2.0)
 
 
@@ -98,6 +105,9 @@ def create_app() -> FastAPI:
     origins = [o.strip() for o in
                os.environ.get("NEURAL_ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
                if o.strip()]
+    # Add the body guard first so CORS is the outer layer and can decorate its
+    # 413 responses with the same headers as every other API response.
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(CORSMiddleware, allow_origins=origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -106,7 +116,8 @@ def create_app() -> FastAPI:
         app.include_router(router)
     for router in routers:                    # versioned mirror for the SPA
         app.include_router(router, prefix="/api/v1", include_in_schema=False)
-    for router in (video_routes.router, job_routes.router):
+    for router in (video_routes.router, job_routes.router,
+                   live_routes.router, admin_routes.router):
         app.include_router(router, prefix="/api/v1")
         app.include_router(router, prefix="", include_in_schema=False)
     analytics_routers = (session_routes.router, track_routes.router,

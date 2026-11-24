@@ -230,15 +230,9 @@ function SpeedEnvelope({ stats }: { stats: StatSummary }) {
             <span>p50 {formatNumber(stats.p50, 1)}</span>
             <span>p90 {formatNumber(p90, 1)}</span>
           </div>
-          <p className="hint hint--flush">
-            Percentile envelope only. The scene endpoint returns summary percentiles, not a
-            raw speed histogram, so no bins are fabricated.
-          </p>
         </div>
       ) : (
-        <p className="hint hint--flush">
-          The API returned a sample count without a complete p10–p90 envelope.
-        </p>
+        <p className="hint hint--flush">Incomplete p10–p90 envelope.</p>
       )}
 
       <div className="scene-speed__facts">
@@ -355,10 +349,6 @@ export function SceneMovement({ speed, directions }: SceneMovementProps) {
                         );
                       })}
                     </div>
-                    <p className="hint hint--flush">
-                      Eight persisted octants; the brighter rows are the recorded dominant
-                      flow (≥20% share). No heading is inferred for a missing bin.
-                    </p>
                   </div>
                 </div>
               </>

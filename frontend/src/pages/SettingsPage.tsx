@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, describeError } from "../lib/api";
 import { useResource } from "../hooks/useResource";
 import { useApiHealth, apiPhase } from "../app/ApiHealthProvider";
-import type { EngineConfig, JobList, SourceEntry } from "../lib/types";
+import { useSession } from "../app/SessionProvider";
+import type { EngineConfig, JobList, PurgedCounts, SourceEntry } from "../lib/types";
 import {
   draftFromConfig,
   draftIsDirty,
@@ -91,6 +92,34 @@ export function SettingsPage() {
   const [resetting, setResetting] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const sessionState = useSession();
+  const [purgeArmed, setPurgeArmed] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [purged, setPurged] = useState<PurgedCounts | null>(null);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+
+  const purgeEverything = async () => {
+    setPurging(true);
+    setPurgeError(null);
+    try {
+      const result = await api.purgeAll();
+      setPurged(result.purged);
+      setPurgeArmed(false);
+      sessionState.reload();
+      config.reload();
+      system.reload();
+      activity.reload();
+      setFeedback({
+        tone: "ok",
+        title: "All tracked data cleared",
+        body: `Removed ${formatNumber(result.purged.sessions)} sessions, ${formatNumber(result.purged.events)} observation rows and ${formatNumber(result.purged.uploads)} uploaded files. The dashboard now starts from an empty store.`,
+      });
+    } catch (error) {
+      setPurgeError(describeError(error));
+    } finally {
+      setPurging(false);
+    }
+  };
 
   useEffect(() => {
     if (!config.data) return;
@@ -208,7 +237,7 @@ export function SettingsPage() {
       <PageHeader
         eyebrow="Engine"
         title="System Settings"
-        lede="Live API health, processing limits and the engine configuration held by this process. Every write is validated by the backend; nothing here is persisted outside the running service."
+        lede="Live API health, processing limits and engine configuration."
         aside={
           <>
             <span
@@ -1024,6 +1053,114 @@ export function SettingsPage() {
           </Panel>
         </div>
       </div>
+
+      <section className="section" aria-labelledby="settings-vault-title">
+        <SectionHeader
+          id="settings-vault-title"
+          title="Data vault"
+          level={3}
+          meta="Irreversible purge · starts the dashboard fresh"
+        />
+        <Panel
+          title="Clear all tracked data"
+          sub="Every session, observation, trajectory, preview, upload and live capture"
+          className={purged ? "vault--done" : undefined}
+        >
+          <div className="vault">
+            <p className="quantum-panel-intro">
+              This removes the analysis database rows, retained preview frames and trajectories,
+              uploaded videos and finished job history, and cancels any running analysis or live
+              capture. Configuration, bundled sample files and the engine itself are not touched.
+              Once cleared there is no undo — export the sessions you need first.
+            </p>
+            <div className="vault__status">
+              <div className="vault__count">
+                <span>Persisted sessions</span>
+                <b>{sessionState.status === "ready" ? formatNumber(sessionState.total) : "—"}</b>
+              </div>
+              <div className="vault__count">
+                <span>Active jobs</span>
+                <b>{formatNumber(activeJobs)}</b>
+              </div>
+              <div className="vault__count">
+                <span>Purge scope</span>
+                <b style={{ fontSize: 13 }}>database · media · jobs</b>
+              </div>
+              <div className="vault__count">
+                <span>Last purge</span>
+                <b>{purged ? `${formatNumber(purged.sessions)} runs` : "never"}</b>
+              </div>
+            </div>
+
+            {purged && (
+              <div className="vault__confirm" role="status">
+                <p>
+                  Purge complete. Removed {formatNumber(purged.sessions)} sessions ·{" "}
+                  {formatNumber(purged.events)} observations · {formatNumber(purged.tracks)} track
+                  summaries · {formatNumber(purged.points)} trajectory points ·{" "}
+                  {formatNumber(purged.calibration)} calibration snapshots ·{" "}
+                  {formatNumber(purged.artifacts)} retained artifact sets ·{" "}
+                  {formatNumber(purged.uploads)} uploads.
+                </p>
+              </div>
+            )}
+
+            {purgeError && (
+              <p className="note-line note-line--danger">
+                <span className="dot dot--bad" /> The purge failed: {purgeError}. Nothing is
+                reported as cleared unless the API confirmed it.
+              </p>
+            )}
+
+            <div className="vault__actions">
+              {!purgeArmed ? (
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={() => {
+                    setPurgeArmed(true);
+                    setPurged(null);
+                    setPurgeError(null);
+                  }}
+                  disabled={purging}
+                >
+                  Clear all data
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    onClick={() => void purgeEverything()}
+                    disabled={purging}
+                  >
+                    {purging ? "Purging…" : "Yes, erase everything"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--quiet"
+                    onClick={() => setPurgeArmed(false)}
+                    disabled={purging}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+              <span className="hint">
+                Active analysis jobs are cancelled before anything is deleted.
+              </span>
+            </div>
+
+            {purgeArmed && (
+              <div className="vault__confirm">
+                <p>
+                  Erase every persisted session and all retained media? This cannot be undone.
+                </p>
+              </div>
+            )}
+          </div>
+        </Panel>
+      </section>
 
       <p className="hint settings-footnote">
         API health is polled by the console. Configuration is held by the backend process and is not

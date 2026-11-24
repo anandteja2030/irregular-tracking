@@ -215,6 +215,20 @@ def test_upload_rejects_oversized_file(client: TestClient, monkeypatch):
     assert list(api_settings.upload_dir().iterdir()) == []
 
 
+def test_oversized_body_is_rejected_before_multipart_parsing(
+        client: TestClient, monkeypatch):
+    """The cap protects the request body, not only the decoded file."""
+    monkeypatch.setattr(api_settings.settings, "max_upload_bytes", 1024)
+    body = b"x" * (2 * 1024 * 1024)
+    response = client.post(
+        "/api/v1/videos/upload", content=body,
+        headers={"content-type": "video/mp4",
+                 "content-length": str(len(body))})
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "file_too_large"
+    assert list(api_settings.upload_dir().iterdir()) == []
+
+
 def test_upload_sanitises_traversal_filename(client: TestClient):
     response = _upload(client, filename="../../etc/passwd.mp4")
     assert response.status_code == 201, response.text

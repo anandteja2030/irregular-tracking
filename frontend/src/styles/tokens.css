@@ -54,10 +54,13 @@
   --border-accent-2: rgba(112, 123, 255, 0.34);
 
   /* ---------------------------------------------------------------- glass */
-  --glass: rgba(15, 17, 25, 0.66);
-  --glass-soft: rgba(17, 20, 30, 0.42);
-  --glass-strong: rgba(20, 23, 34, 0.86);
-  --glass-blur: blur(22px) saturate(135%);
+  --glass: rgba(15, 17, 25, 0.82);
+  --glass-soft: rgba(17, 20, 30, 0.62);
+  --glass-strong: rgba(20, 23, 34, 0.9);
+  /* No backdrop blur. Every surface is already near-opaque, and blurring the
+     page behind dozens of panels costs a full-surface composite on each
+     scroll frame without changing what the eye reads. */
+  --glass-blur: none;
   --glass-border: rgba(255, 255, 255, 0.085);
   --glass-highlight: rgba(255, 255, 255, 0.05);
 
@@ -193,9 +196,9 @@
   /* --------------------------------------------------------------- motion */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
-  --fast: 140ms;
-  --base: 260ms;
-  --slow: 480ms;
+  --fast: 110ms;
+  --base: 180ms;
+  --slow: 360ms;
   --duration-fast: var(--fast);
   --duration-base: var(--base);
   --duration-slow: var(--slow);

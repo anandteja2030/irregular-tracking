@@ -43,6 +43,10 @@ export function useResource<T>(
   const loadRef = useRef(load);
   loadRef.current = load;
   const mounted = useRef(true);
+  /** Fingerprint of the last rendered payload. A background poll that returns
+   *  the same JSON changes nothing, so it must not re-render the page: on a
+   *  long dashboard that re-render is the visible hitch, not the fetch. */
+  const lastPayload = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -69,6 +73,12 @@ export function useResource<T>(
       try {
         const result = await loadRef.current(controller.signal);
         if (cancelled || controller.signal.aborted) return;
+        const fingerprint = JSON.stringify(result);
+        if (background && fingerprint === lastPayload.current) {
+          lastPayload.current = fingerprint;
+          return;
+        }
+        lastPayload.current = fingerprint;
         setData(result);
         setError(null);
         setStatus("ready");

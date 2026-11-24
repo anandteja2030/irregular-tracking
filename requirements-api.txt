@@ -1,5 +1,5 @@
-# Phase 1 API stack (kept separate from requirements.txt so the Streamlit/CLI
-# install path stays exactly as it was).
+# API stack (kept separate from requirements.txt so the engine/CLI install
+# path stays minimal).
 #
 #   .venv/bin/pip install -r requirements-api.txt
 #   .venv/bin/python -m uvicorn src.api.main:app --reload --port 8000

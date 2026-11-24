@@ -44,7 +44,11 @@ class ObjectDetection:
     color: str | None                   # one of config colour names, or None
     shape: str                          # circle/square/rectangle/triangle/polygon/unknown
     aspect: float                       # w / h
-    contour: np.ndarray
+    contour: np.ndarray | None = None
+    # Real object class from the pretrained detector ("car", "truck", ...);
+    # None for colour-blob candidates.
+    class_name: str | None = None
+    confidence: float = 0.0
 
     # accessor the visualizer uses: (x1, y1, x2, y2)
     @property

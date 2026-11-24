@@ -16,6 +16,8 @@ import { SceneCalibration } from "../components/SceneCalibration";
 import { SceneMovement } from "../components/SceneMovement";
 import { SceneSpatial } from "../components/SceneSpatial";
 import { SceneInvestigation } from "../components/SceneInvestigation";
+import { SceneQuantum } from "../components/SceneQuantum";
+import { ObjectRegistry } from "../components/ObjectRegistry";
 
 const FETCH_CHUNK = 500;
 const MAX_EVENTS = 2_000;
@@ -133,11 +135,11 @@ export function SceneIntelligencePage() {
   const zoneConfig = config.data?.zone;
 
   return (
-    <>
+    <div className="scene-surface">
       <PageHeader
-        eyebrow="Scene baseline"
+        eyebrow="Scene core"
         title="Scene Intelligence"
-        lede="Calibration evidence, learned movement, retained spatial coordinates and the elevated events that deviate from the scene. Missing artifacts stay unavailable; no coordinate, zone or measurement is invented."
+        lede="Every tracked object in this clip, the baseline it was measured against, and where its observations deviate."
         aside={
           selected ? (
             <div className="scene-header-aside">
@@ -175,10 +177,6 @@ export function SceneIntelligencePage() {
             compact={false}
             title="Scene intelligence unavailable"
           />
-          <p className="hint hint--flush">
-            The scene endpoint could not be read. No fallback baseline, density map or zone
-            activity is shown.
-          </p>
         </Panel>
       ) : !sceneData ? (
         <Panel>
@@ -186,24 +184,52 @@ export function SceneIntelligencePage() {
         </Panel>
       ) : (
         <>
-          <section className="section">
-            <SceneCalibration scene={sceneData} config={config} />
+          <section className="scene-stage" aria-labelledby="scene-quantum-title">
+            <SceneQuantum
+              sessionId={selectedId}
+              scene={sceneData}
+              tracks={tracks.data?.tracks ?? []}
+              events={events.data?.rows ?? []}
+              eventsTotal={events.data?.total ?? 0}
+              tracksTotal={tracks.data?.total ?? 0}
+              levels={session.data?.counts.levels ?? null}
+              thresholds={{
+                suspicious: config.data?.anomaly.threshold_suspicious ?? null,
+                irregular: config.data?.anomaly.threshold_irregular ?? null,
+              }}
+            />
           </section>
 
-          <section className="section">
+          <section className="scene-registry-band" aria-label="Tracked objects in this scene">
+            <ObjectRegistry
+              tracks={tracks.data?.tracks ?? []}
+              total={tracks.data?.total ?? 0}
+              sessionId={selectedId}
+              title="Tracked objects in this scene"
+              sub="Named identities · measured speed, path and worst fused level"
+              events={events.data?.rows ?? null}
+              thresholds={{
+                suspicious: config.data?.anomaly.threshold_suspicious ?? null,
+                irregular: config.data?.anomaly.threshold_irregular ?? null,
+              }}
+            />
+          </section>
+
+          <section className="scene-duo" aria-label="Calibration and movement baseline">
+            <SceneCalibration scene={sceneData} config={config} />
             <SceneMovement
               speed={sceneData.speed_baseline}
               directions={sceneData.directions}
             />
           </section>
 
-          <section className="section" aria-labelledby="scene-spatial-title">
+          <section className="scene-holo" aria-labelledby="scene-spatial-title">
             <SectionHeader
               id="scene-spatial-title"
               title="Spatial scene"
               meta={
                 session.data?.artifacts.trajectories
-                  ? "Retained centroids"
+                  ? "Retained centroids · measured paths"
                   : session.status === "error"
                     ? "Retention unknown"
                     : "No retained coordinates"
@@ -220,7 +246,7 @@ export function SceneIntelligencePage() {
             />
           </section>
 
-          <section className="section" aria-labelledby="scene-investigation-title">
+          <section className="scene-investigation-band" aria-labelledby="scene-investigation-title">
             <SectionHeader
               id="scene-investigation-title"
               title="Scene investigation"
@@ -239,69 +265,8 @@ export function SceneIntelligencePage() {
             />
           </section>
 
-          <section className="section">
-            <Panel title="Reading & limits" sub="What this surface can and cannot claim">
-              <div className="scene-limits">
-                <div>
-                  <span className="note__label">API notes</span>
-                  {sceneData.notes.length > 0 ? (
-                    <ul className="note-list">
-                      {sceneData.notes.map((note) => (
-                        <li key={note}>{note}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="hint hint--flush">No additional API notes for this session.</p>
-                  )}
-                </div>
-                <div>
-                  <span className="note__label">Session limits</span>
-                  {session.data?.limitations.length ? (
-                    <ul className="note-list">
-                      {session.data.limitations.map((note) => (
-                        <li key={note}>{note}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="hint hint--flush">
-                      {session.status === "error"
-                        ? "Session limitation details could not be read."
-                        : "No additional session limitations were reported."}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <span className="note__label">Reading rules</span>
-                  <ul className="note-list">
-                    <li>
-                      Speed and trajectory values are pixels and seconds from the source frame;
-                      no camera calibration or metric units are implied.
-                    </li>
-                    <li>
-                      Calibration is a readiness state and evidence count, not a probability.
-                      The API exposes no statistical confidence and no separate
-                      failed-calibration flag.
-                    </li>
-                    <li>
-                      Density is the count of retained centroid points per cell. It is not
-                      occupancy, dwell time or optical density.
-                    </li>
-                    <li>
-                      Zone rows include only elevated events with retained structured evidence.
-                      Configured rectangles are not activity, and absence of evidence is not
-                      absence of activity.
-                    </li>
-                    <li>
-                      A positive scene score means deviation from this clip's learned baseline;
-                      it does not establish a cause or intent.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </Panel>
-          </section>
         </>
       )}
-    </>
+    </div>
   );
 }

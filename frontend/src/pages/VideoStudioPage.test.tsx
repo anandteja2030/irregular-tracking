@@ -183,6 +183,22 @@ describe("video studio intake", () => {
     expect(screen.getByRole("button", { name: /choose file/i })).toBeTruthy();
   });
 
+  it("offers upload and live camera as the two input options", async () => {
+    vi.stubGlobal("fetch", vi.fn(OFFLINE));
+    renderStudio();
+
+    const upload = screen.getByRole("button", { name: /upload a video/i });
+    const live = screen.getByRole("button", { name: /live webcam tracking/i });
+    expect(upload.getAttribute("aria-pressed")).toBe("true");
+    expect(live.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(live);
+
+    expect(live.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /start live tracking/i })).toBeTruthy();
+    expect(screen.queryByLabelText("Video file")).toBeNull();
+  });
+
   it("rejects an unsupported file before anything is uploaded", async () => {
     vi.stubGlobal("fetch", vi.fn(OFFLINE));
     renderStudio();

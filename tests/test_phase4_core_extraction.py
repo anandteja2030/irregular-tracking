@@ -4,7 +4,7 @@ These tests pin three guarantees introduced by the extraction:
 
 1. `src.core.analysis_service` is the single implementation; `src.ui.session`
    only re-exports it (same objects, not copies).
-2. The API and the core never import the UI package or Streamlit at runtime.
+2. The API and the core never import the UI package at runtime.
 3. `src.api.repository.connect()` degrades to "no data" for an unusable
    database and propagates real statement errors as `sqlite3` errors instead
    of masking them with `RuntimeError: generator didn't stop after throw()`.
@@ -82,17 +82,16 @@ def test_core_and_api_do_not_import_the_ui_package():
     assert not offenders, offenders
 
 
-def test_importing_the_api_loads_no_streamlit_or_session_module():
-    """The API must not pull in Streamlit, nor the old UI session module.
+def test_importing_the_api_loads_no_ui_session_module():
+    """The API must not pull in the legacy UI session shim.
 
-    `src.pipeline` still imports `src.ui.visualization` (pure OpenCV drawing,
-    no Streamlit). That engine -> drawing edge predates this phase and is out
-    of scope, so only the Streamlit/service-scope guarantees are pinned here.
+    `src.pipeline` still imports `src.ui.visualization` (pure OpenCV drawing).
+    That engine -> drawing edge predates this phase and is out of scope, so
+    only the service-scope guarantee is pinned here.
     """
     code = (
         "import sys\n"
         "import src.api.main\n"
-        "assert 'streamlit' not in sys.modules, 'streamlit imported'\n"
         "assert 'src.ui.session' not in sys.modules, 'ui session imported'\n"
         "legacy = sorted(m for m in sys.modules if m.startswith('src.ui.'))\n"
         "assert 'src.ui.session' not in legacy, legacy\n"
@@ -101,4 +100,3 @@ def test_importing_the_api_loads_no_streamlit_or_session_module():
     proc = subprocess.run([sys.executable, "-c", code], cwd=ROOT,
                           capture_output=True, text=True, timeout=180)
     assert proc.returncode == 0, proc.stderr
-    assert "streamlit" not in proc.stdout

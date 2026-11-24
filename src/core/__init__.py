@@ -1,7 +1,7 @@
-"""Framework-neutral core services shared by the API, the Streamlit UI and the CLI.
+"""Framework-neutral core services shared by the API and the CLI.
 
-Modules here must not import Streamlit or any other presentation layer: the
-API and the dashboard are two front doors onto the same engine. Detection,
+Modules here must not import any presentation layer: the API and console are
+two front doors onto the same engine. Detection,
 tracking, calibration and scoring stay in `src.pipeline` / `src.anomaly`; this
 package only orchestrates a single run and its persistence.
 """

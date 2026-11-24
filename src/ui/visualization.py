@@ -48,7 +48,14 @@ def draw_tracked_objects(frame_bgr: np.ndarray, entries: list[dict]) -> np.ndarr
             pts = np.array([(int(px), int(py)) for _, px, py in traj], np.int32)
             cv2.polylines(out, [pts], False, box, 1)
 
-        label = (f"#{e['track_id']} {e.get('color') or '?'} {e.get('shape', '?')}"
+        # A detected class ("Car") is what the object is; the colour/shape
+        # fallback only exists for the synthetic colour-engine samples.
+        kind = e.get("class_name")
+        if kind:
+            kind = str(kind).capitalize()
+        else:
+            kind = f"{e.get('color') or '?'} {e.get('shape', '?')}"
+        label = (f"T{e['track_id']:02d} {kind}"
                  f" | {e.get('speed_px_s', 0):.0f} px/s")
         level_text = e.get("level", "")
 
