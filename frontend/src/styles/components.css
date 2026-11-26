@@ -183,18 +183,37 @@
 }
 
 .hero__title {
-  font-size: 34px;
-  line-height: 1.06;
-  letter-spacing: -0.035em;
-  font-weight: 560;
-  margin-top: 15px;
+  font-size: clamp(34px, 3.3vw, 48px);
+  line-height: 1.01;
+  letter-spacing: -0.048em;
+  font-weight: 690;
+  margin-top: 16px;
   text-wrap: balance;
 }
 
 .hero__title em {
   font-style: normal;
   color: var(--accent-bright);
-  text-shadow: 0 0 28px rgba(79, 227, 255, 0.28);
+  text-shadow: 0 0 34px rgba(79, 227, 255, 0.4);
+}
+
+/* A terminal caret after the engine state: the deck's one piece of motion in
+   the copy, and it reads as a live prompt rather than decoration. */
+.hero__title::after {
+  content: "";
+  display: inline-block;
+  width: 0.25em;
+  height: 0.66em;
+  margin-left: 0.11em;
+  vertical-align: -0.02em;
+  background: var(--accent);
+  box-shadow: 0 0 20px rgba(79, 227, 255, 0.6);
+  animation: hero-caret 1.15s steps(1, end) infinite;
+}
+
+@keyframes hero-caret {
+  0%, 54% { opacity: 1; }
+  55%, 100% { opacity: 0.1; }
 }
 
 .hero__lede {
