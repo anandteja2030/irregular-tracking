@@ -1,57 +1,29 @@
 /** Animated 3D detection core for the Command Overview hero.
  *
- * A perspective scene of the engine's actual detection job: a rotating sensor
- * cube inside a guarded field, a sweep plane crossing the ground grid, and one
- * lock marker per populated verdict band. Every number and marker comes from
- * the selected session; when there is no session the scene rides in standby
- * with the same geometry and no invented counts.
+ * One perspective object — the detection cube — turning above the measured
+ * tallies. Every number comes from the selected session; with no session the
+ * cube rides in standby and the counts read "—" rather than invented values.
  *
  * Motion is transform/opacity only (no blur, no filter) so it stays cheap, and
  * the global reduced-motion rule in base.css freezes it for users who ask.
  */
-import type { Level, LevelCounts } from "../lib/types";
+import type { LevelCounts } from "../lib/types";
 import { LEVEL_COLOURS, LEVEL_ORDER } from "./charts";
 import { formatNumber } from "../lib/format";
 
-const BAND_TAG: Record<Level, string> = {
-  Normal: "REG",
-  Suspicious: "SUS",
-  Irregular: "IRR",
-};
+const FACES = ["front", "back", "right", "left", "top", "bottom"] as const;
 
-interface LockMarker {
-  level: Level;
-  x: number;
-  y: number;
-  depth: number;
-  delay: number;
-  scale: number;
-}
-
-/** Deterministic marker placement: two locks per band that actually fired. */
-function lockMarkers(levels: LevelCounts | null | undefined): LockMarker[] {
-  if (!levels) return [];
-  const markers: LockMarker[] = [];
-  LEVEL_ORDER.forEach((level) => {
-    const count = levels[level] ?? 0;
-    if (count <= 0) return;
-    const slots = Math.min(2, count > 1 ? 2 : 1);
-    for (let slot = 0; slot < slots; slot += 1) {
-      const index = markers.length;
-      const angle = ((-90 + index * 61) * Math.PI) / 180;
-      const radius = 0.3 + (index % 3) * 0.11;
-      markers.push({
-        level,
-        x: 50 + Math.cos(angle) * radius * 50,
-        y: 50 + Math.sin(angle) * radius * 30,
-        depth: -70 + (index % 4) * 48,
-        delay: index * 0.65,
-        scale: 0.86 + (index % 3) * 0.13,
-      });
-    }
-  });
-  return markers;
-}
+/** The eight corners of the cube, in half-extents on each axis. */
+const VERTICES = [
+  [-1, -1, -1],
+  [-1, -1, 1],
+  [-1, 1, -1],
+  [-1, 1, 1],
+  [1, -1, -1],
+  [1, -1, 1],
+  [1, 1, -1],
+  [1, 1, 1],
+] as const;
 
 export function DetectionCore({
   levels,
@@ -66,7 +38,6 @@ export function DetectionCore({
   elevated: number;
   online: boolean;
 }) {
-  const markers = lockMarkers(levels);
   const total = observations;
 
   return (
@@ -93,55 +64,26 @@ export function DetectionCore({
 
       <div className="detector__stage" aria-hidden="true">
         <div className="detector__world">
-          <div className="detector__floor" />
-          <div className="detector__horizon" />
-
-          <div className="detector__cone">
-            <span className="detector__cone-edge detector__cone-edge--l" />
-            <span className="detector__cone-edge detector__cone-edge--r" />
-            <span className="detector__cone-face" />
-          </div>
-
-          <div className="detector__ring detector__ring--a" />
-          <div className="detector__ring detector__ring--b" />
-          <div className="detector__ring detector__ring--c" />
+          <div className="detector__halo" />
 
           <div className="detector__cube">
-            {["front", "back", "right", "left", "top", "bottom"].map((face) => (
+            {FACES.map((face) => (
               <span
                 key={face}
                 className={`detector__cube-face detector__cube-face--${face}`}
               />
             ))}
+            {VERTICES.map(([x, y, z]) => (
+              <span
+                key={`${x}:${y}:${z}`}
+                className="detector__vertex"
+                style={{
+                  transform: `translate3d(calc(var(--det-cube) / 2 * ${x}), calc(var(--det-cube) / 2 * ${y}), calc(var(--det-cube) / 2 * ${z}))`,
+                }}
+              />
+            ))}
           </div>
-
-          <div className="detector__halo" />
-          <div className="detector__sweep" />
-
-          {markers.map((marker, index) => (
-            <div
-              key={`${marker.level}-${index}`}
-              className={`detector__lock detector__lock--${marker.level.toLowerCase()}`}
-              style={{
-                left: `${marker.x}%`,
-                top: `${marker.y}%`,
-                transform: `translate(-50%, -50%) translateZ(${marker.depth}px) scale(${marker.scale})`,
-                animationDelay: `${marker.delay}s`,
-                ["--lock-colour" as string]: LEVEL_COLOURS[marker.level],
-              }}
-            >
-              <span className="detector__lock-corner detector__lock-corner--tl" />
-              <span className="detector__lock-corner detector__lock-corner--tr" />
-              <span className="detector__lock-corner detector__lock-corner--bl" />
-              <span className="detector__lock-corner detector__lock-corner--br" />
-              <span className="detector__lock-tag mono">{BAND_TAG[marker.level]}</span>
-            </div>
-          ))}
         </div>
-
-        <span className="detector__scanline" />
-        <span className="detector__crosshair" />
-        <span className="detector__reticle" />
       </div>
 
       <footer className="detector__hud">

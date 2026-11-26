@@ -3943,18 +3943,13 @@ button:focus-visible,
 }
 
 /* ---------------------------------------------------------- detection core */
-/* The hero proof surface: a perspective detection scene driven by the selected
-   run. Transform/opacity animation only — no blur, no filter, no repaint-heavy
-   shadow work — so the wall keeps its look without costing frames. */
-/* The scene is not a card inside the hero: it bleeds to the deck's right, top
-   and bottom edges, carries no frame of its own, and fades into the hero
-   surface on its open left side. Only the field itself is drawn. */
+/* The hero proof surface: one detection cube turning in perspective. It is not
+   a card inside the hero — the scene bleeds to the deck's right, top and bottom
+   edges, carries no frame of its own, and fades into the hero surface on its
+   open left side. Nothing surrounds the cube: the object is the scene. Motion
+   is transform/opacity only. */
 .detector {
-  --det-cube: clamp(100px, 8.2vw, 164px);
-  --det-ring-lg: clamp(310px, 29vw, 500px);
-  --det-ring-md: clamp(238px, 23vw, 404px);
-  --det-ring-sm: clamp(176px, 17vw, 296px);
-  --det-sweep: clamp(300px, 31vw, 520px);
+  --det-cube: clamp(132px, 10.5vw, 210px);
   position: relative;
   min-width: 0;
   min-height: clamp(460px, 35vw, 560px);
@@ -4017,105 +4012,34 @@ button:focus-visible,
   position: absolute;
   inset: 0;
   z-index: 1;
-  perspective: 1000px;
+  perspective: 1150px;
   perspective-origin: 52% 44%;
   overflow: hidden;
   background:
-    radial-gradient(52% 46% at 58% 42%, rgba(79, 227, 255, 0.17), transparent 72%),
-    radial-gradient(64% 58% at 92% 92%, rgba(112, 123, 255, 0.13), transparent 76%);
+    radial-gradient(46% 40% at 55% 42%, rgba(79, 227, 255, 0.18), transparent 72%),
+    radial-gradient(66% 60% at 94% 94%, rgba(112, 123, 255, 0.14), transparent 76%);
   mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 36%);
   -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 36%);
 }
 
-/* Instrument ticks along the deck's top edge: a measured scale, not a frame. */
-.detector__stage::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 22%;
-  right: 0;
-  height: 9px;
-  background-image: repeating-linear-gradient(
-    90deg,
-    rgba(79, 227, 255, 0.42) 0 1px,
-    transparent 1px 26px
-  );
-  mask-image: linear-gradient(90deg, transparent, #000 34%);
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 34%);
-  opacity: 0.6;
-  pointer-events: none;
-}
-
 .detector__world {
   position: absolute;
-  inset: 0 0 62px 0;
+  inset: 0 0 76px 0;
   transform-style: preserve-3d;
   animation: detector-drift 24s ease-in-out infinite alternate;
 }
 
-/* ground grid ------------------------------------------------------------- */
-.detector__floor {
-  position: absolute;
-  left: 50%;
-  top: 52%;
-  width: 200%;
-  height: 200%;
-  margin: -100% 0 0 -100%;
-  background-image:
-    linear-gradient(rgba(79, 227, 255, 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(79, 227, 255, 0.2) 1px, transparent 1px);
-  background-size: 44px 44px;
-  transform: rotateX(76deg);
-  transform-origin: 50% 50%;
-  mask-image: radial-gradient(circle at 50% 50%, #000 14%, transparent 68%);
-  -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 14%, transparent 68%);
-  animation: detector-floor 6.5s linear infinite;
-  opacity: 0.85;
-}
-
-.detector__horizon {
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  top: 52%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(79, 227, 255, 0.6), transparent);
-  box-shadow: 0 0 18px rgba(79, 227, 255, 0.35);
-  opacity: 0.85;
-}
-
-/* sensor rings ------------------------------------------------------------ */
-.detector__ring {
+/* A soft field glow behind the object: light, not a second shape. */
+.detector__halo {
   position: absolute;
   left: 50%;
   top: 50%;
+  width: calc(var(--det-cube) * 2.8);
+  height: calc(var(--det-cube) * 2.8);
+  margin: calc(var(--det-cube) * -1.4) 0 0 calc(var(--det-cube) * -1.4);
   border-radius: 50%;
-  border: 1.5px solid rgba(79, 227, 255, 0.42);
-  pointer-events: none;
-  will-change: transform;
-}
-
-.detector__ring--a {
-  width: var(--det-ring-md);
-  height: var(--det-ring-md);
-  border-style: dashed;
-  border-color: rgba(79, 227, 255, 0.5);
-  animation: detector-ring 16s linear infinite;
-}
-
-.detector__ring--b {
-  width: var(--det-ring-sm);
-  height: var(--det-ring-sm);
-  border-color: rgba(126, 140, 255, 0.62);
-  animation: detector-ring 10s linear infinite reverse;
-}
-
-.detector__ring--c {
-  width: var(--det-ring-lg);
-  height: var(--det-ring-lg);
-  border-width: 1px;
-  border-color: rgba(143, 214, 255, 0.28);
-  animation: detector-ring 26s linear infinite;
+  background: radial-gradient(circle, rgba(79, 227, 255, 0.26), transparent 60%);
+  animation: detector-breathe 5.4s ease-in-out infinite;
 }
 
 /* sensor cube ------------------------------------------------------------- */
@@ -4127,17 +4051,21 @@ button:focus-visible,
   height: var(--det-cube);
   margin: calc(var(--det-cube) / -2) 0 0 calc(var(--det-cube) / -2);
   transform-style: preserve-3d;
-  animation: detector-cube 19s linear infinite;
+  animation: detector-cube 24s linear infinite;
   will-change: transform;
 }
 
 .detector__cube-face {
   position: absolute;
   inset: 0;
-  border: 1px solid rgba(140, 248, 255, 0.85);
-  background:
-    linear-gradient(150deg, rgba(79, 227, 255, 0.26), rgba(112, 123, 255, 0.08));
-  box-shadow: inset 0 0 28px rgba(79, 227, 255, 0.32);
+  border: 1px solid rgba(150, 248, 255, 0.88);
+  background-color: rgba(79, 227, 255, 0.06);
+  background-image:
+    linear-gradient(rgba(121, 245, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(121, 245, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(150deg, rgba(79, 227, 255, 0.24), rgba(112, 123, 255, 0.07));
+  background-size: 22px 22px, 22px 22px, 100% 100%;
+  box-shadow: inset 0 0 30px rgba(79, 227, 255, 0.32);
 }
 
 .detector__cube-face--front { transform: translateZ(calc(var(--det-cube) / 2)); }
@@ -4147,143 +4075,27 @@ button:focus-visible,
 .detector__cube-face--top { transform: rotateX(90deg) translateZ(calc(var(--det-cube) / 2)); }
 .detector__cube-face--bottom { transform: rotateX(-90deg) translateZ(calc(var(--det-cube) / 2)); }
 
-.detector__halo {
+/* Face shading gives the cube solidity: lit top, cooler sides, muted back. */
+.detector__cube-face--top { background-color: rgba(150, 248, 255, 0.14); }
+.detector__cube-face--left { background-color: rgba(79, 227, 255, 0.09); }
+.detector__cube-face--right { background-color: rgba(112, 123, 255, 0.1); }
+.detector__cube-face--back {
+  background-color: rgba(6, 12, 24, 0.45);
+  border-color: rgba(79, 227, 255, 0.55);
+}
+.detector__cube-face--bottom { background-color: rgba(4, 9, 18, 0.55); }
+
+/* Eight lit corners: the cube reads as a measured object, not a flat square. */
+.detector__vertex {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(var(--det-ring-sm) * 0.92);
-  height: calc(var(--det-ring-sm) * 0.92);
-  margin: calc(var(--det-ring-sm) * -0.46) 0 0 calc(var(--det-ring-sm) * -0.46);
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(79, 227, 255, 0.34), transparent 64%);
-  animation: detector-breathe 4.6s ease-in-out infinite;
-}
-
-/* projection cone --------------------------------------------------------- */
-.detector__cone {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: clamp(320px, 28vw, 470px);
-  height: clamp(250px, 20vw, 340px);
-  margin-left: clamp(-235px, -14vw, -160px);
-  transform: translateY(-6px) rotateX(62deg) translateZ(-30px);
-  transform-style: preserve-3d;
-  opacity: 0.75;
-  pointer-events: none;
-}
-
-.detector__cone-face {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to bottom, rgba(79, 227, 255, 0.22), rgba(79, 227, 255, 0));
-  clip-path: polygon(47% 0, 53% 0, 100% 100%, 0 100%);
-}
-
-.detector__cone-edge {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  background: linear-gradient(to bottom, rgba(79, 227, 255, 0.8), transparent);
-}
-
-.detector__cone-edge--l { transform-origin: top center; transform: rotate(-32deg); }
-.detector__cone-edge--r { transform-origin: top center; transform: rotate(32deg); }
-
-/* radar sweep ------------------------------------------------------------- */
-.detector__sweep {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: var(--det-sweep);
-  height: var(--det-sweep);
-  margin: calc(var(--det-sweep) / -2) 0 0 calc(var(--det-sweep) / -2);
-  border-radius: 50%;
-  background: conic-gradient(
-    from 0deg,
-    rgba(79, 227, 255, 0.34),
-    rgba(79, 227, 255, 0.02) 42deg,
-    transparent 90deg
-  );
-  transform: rotateX(66deg);
-  mask-image: radial-gradient(circle, transparent 16%, #000 30%, #000 72%, transparent 88%);
-  -webkit-mask-image: radial-gradient(circle, transparent 16%, #000 30%, #000 72%, transparent 88%);
-  animation: detector-spin-flat 7.5s linear infinite;
-  will-change: transform;
-  opacity: 0.68;
-}
-
-/* lock markers ------------------------------------------------------------ */
-.detector__lock {
-  position: absolute;
-  width: 58px;
-  height: 42px;
-  color: var(--lock-colour, var(--accent));
-  animation: detector-lock 4.6s ease-in-out infinite;
-  will-change: opacity;
-}
-
-.detector__lock-corner {
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid var(--lock-colour, var(--accent));
-  box-shadow: 0 0 12px -1px var(--lock-colour, var(--accent));
-}
-
-.detector__lock-corner--tl { left: 0; top: 0; border-right: 0; border-bottom: 0; }
-.detector__lock-corner--tr { right: 0; top: 0; border-left: 0; border-bottom: 0; }
-.detector__lock-corner--bl { left: 0; bottom: 0; border-right: 0; border-top: 0; }
-.detector__lock-corner--br { right: 0; bottom: 0; border-left: 0; border-top: 0; }
-
-.detector__lock-tag {
-  position: absolute;
-  left: 0;
-  top: -14px;
-  font-size: 7px;
-  letter-spacing: 0.16em;
-  color: var(--lock-colour, var(--accent));
-  opacity: 0.85;
-}
-
-/* screen-space instrumentation ------------------------------------------- */
-.detector__scanline {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 74px;
-  background: linear-gradient(180deg, transparent, rgba(79, 227, 255, 0.11), transparent);
-  animation: detector-scan 6.2s linear infinite;
-  pointer-events: none;
-}
-
-.detector__crosshair {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 1px;
-  height: 100%;
-  margin-left: -0.5px;
-  background: linear-gradient(180deg, transparent, rgba(79, 227, 255, 0.16) 42%, transparent);
-  pointer-events: none;
-}
-
-.detector__crosshair::after {
-  content: "";
-  position: absolute;
-  left: -50vw;
-  top: 50%;
-  width: 120vw;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(79, 227, 255, 0.14), transparent);
-}
-
-/* The inner corner brackets belonged to the old framed stage; the deck edge is
-   the frame now, so they are gone. */
-.detector__reticle {
-  display: none;
+  background: #dcfeff;
+  box-shadow: 0 0 12px 1px rgba(79, 227, 255, 0.9);
 }
 
 /* measured HUD ------------------------------------------------------------ */
@@ -4309,8 +4121,8 @@ button:focus-visible,
   content: "";
   position: absolute;
   inset: auto 0 0 0;
-  height: 46%;
-  background: linear-gradient(180deg, transparent, rgba(3, 7, 16, 0.82));
+  height: 38%;
+  background: linear-gradient(180deg, transparent, rgba(3, 7, 16, 0.8));
   pointer-events: none;
 }
 
@@ -4394,26 +4206,9 @@ button:focus-visible,
   to { transform: rotateX(4deg) rotateY(11deg); }
 }
 
-/* Transform, not background-position: a moved grid is composited, while a
-   scrolled background repaints the whole floor on every frame. */
-@keyframes detector-floor {
-  from { transform: rotateX(76deg) translateY(0); }
-  to { transform: rotateX(76deg) translateY(44px); }
-}
-
-@keyframes detector-ring {
-  from { transform: translate(-50%, -50%) rotateX(72deg) rotateZ(0deg); }
-  to { transform: translate(-50%, -50%) rotateX(72deg) rotateZ(360deg); }
-}
-
 @keyframes detector-cube {
   from { transform: rotateX(-18deg) rotateY(0deg); }
   to { transform: rotateX(-18deg) rotateY(360deg); }
-}
-
-@keyframes detector-spin-flat {
-  from { transform: rotateX(66deg) rotateZ(0deg); }
-  to { transform: rotateX(66deg) rotateZ(360deg); }
 }
 
 @keyframes detector-breathe {
@@ -4426,19 +4221,10 @@ button:focus-visible,
   50% { opacity: 0.28; }
 }
 
-@keyframes detector-lock {
-  0%, 100% { opacity: 0.34; }
-  42% { opacity: 1; }
-  62% { opacity: 0.72; }
-}
-
-@keyframes detector-scan {
-  from { transform: translateY(-90px); }
-  to { transform: translateY(420px); }
-}
-
 @media (max-width: 900px) {
-  .detector__ring--c { display: none; }
+  .detector {
+    --det-cube: clamp(118px, 26vw, 172px);
+  }
 }
 
 @media (max-width: 560px) {
