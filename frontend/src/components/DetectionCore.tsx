@@ -13,6 +13,22 @@ import { formatNumber } from "../lib/format";
 
 const FACES = ["front", "back", "right", "left", "top", "bottom"] as const;
 
+/** A miniature wireframe cube: one per satellite orbiting the core. */
+function Satellite({ className }: { className: string }) {
+  return (
+    <span className={`detector__sat ${className}`}>
+      <span className="detector__sat-cube">
+        {FACES.map((face) => (
+          <span
+            key={face}
+            className={`detector__sat-face detector__sat-face--${face}`}
+          />
+        ))}
+      </span>
+    </span>
+  );
+}
+
 /** The eight corners of the cube, in half-extents on each axis. */
 const VERTICES = [
   [-1, -1, -1],
@@ -66,6 +82,20 @@ export function DetectionCore({
         <div className="detector__world">
           <div className="detector__halo" />
 
+          <div className="detector__plane">
+            <div className="detector__orbit detector__orbit--a">
+              <Satellite className="detector__sat--a" />
+              <Satellite className="detector__sat--b" />
+              <Satellite className="detector__sat--e" />
+              <span className="detector__ringlet detector__ringlet--a" />
+            </div>
+            <div className="detector__orbit detector__orbit--b">
+              <Satellite className="detector__sat--c" />
+              <Satellite className="detector__sat--d" />
+              <span className="detector__ringlet detector__ringlet--b" />
+            </div>
+          </div>
+
           <div className="detector__cube">
             {FACES.map((face) => (
               <span
@@ -83,6 +113,20 @@ export function DetectionCore({
               />
             ))}
           </div>
+
+          <span className="detector__mark detector__mark--a" />
+          <span className="detector__mark detector__mark--b" />
+          <span className="detector__mark detector__mark--c" />
+          <span className="detector__mark detector__mark--d" />
+
+          <span className="detector__mote detector__mote--a" />
+          <span className="detector__mote detector__mote--b" />
+          <span className="detector__mote detector__mote--c" />
+          <span className="detector__mote detector__mote--d" />
+          <span className="detector__mote detector__mote--e" />
+          <span className="detector__mote detector__mote--f" />
+          <span className="detector__mote detector__mote--g" />
+          <span className="detector__mote detector__mote--h" />
         </div>
       </div>
 
