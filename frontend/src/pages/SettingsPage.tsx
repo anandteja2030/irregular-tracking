@@ -615,16 +615,6 @@ export function SettingsPage() {
                     step={1}
                   />
                   <ConfigField
-                    id="settings-iou-gate"
-                    label="IoU gate"
-                    value={draft.tracking.iou_gate}
-                    onChange={(value) => updateField("tracking", "iou_gate", value)}
-                    error={errors["tracking.iou_gate"]}
-                    min={0}
-                    max={1}
-                    step="any"
-                  />
-                  <ConfigField
                     id="settings-position-gate"
                     label="Position gate"
                     value={draft.tracking.position_gate_px}
@@ -735,26 +725,6 @@ export function SettingsPage() {
                     error={errors["anomaly.per_object_window"]}
                     min={5}
                     max={10_000}
-                    step={1}
-                  />
-                  <ConfigField
-                    id="settings-cluster-min"
-                    label="Scene clusters min"
-                    value={draft.anomaly.scene_cluster_k_min}
-                    onChange={(value) => updateField("anomaly", "scene_cluster_k_min", value)}
-                    error={errors["anomaly.scene_cluster_k_min"]}
-                    min={1}
-                    max={50}
-                    step={1}
-                  />
-                  <ConfigField
-                    id="settings-cluster-max"
-                    label="Scene clusters max"
-                    value={draft.anomaly.scene_cluster_k_max}
-                    onChange={(value) => updateField("anomaly", "scene_cluster_k_max", value)}
-                    error={errors["anomaly.scene_cluster_k_max"]}
-                    min={1}
-                    max={50}
                     step={1}
                   />
                   <ConfigField

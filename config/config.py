@@ -49,7 +49,6 @@ class ColorDetectionConfig:
     })
     min_area: float = 120.0        # reject blobs smaller than this (px^2)
     max_area: float = 120000.0     # reject blobs larger than this
-    min_contour_perimeter: float = 30.0
 
 
 @dataclass
@@ -86,7 +85,6 @@ class TrackingConfig:
     """Kalman tracker + Hungarian matcher."""
     max_age: int = 12            # frames to keep an unmatched track alive
     min_hits: int = 3            # consecutive detections before track is confirmed
-    iou_gate: float = 0.15       # Hungarian validity gate on IoU
     position_gate_px: float = 120.0
     kalman_process_noise: float = 2.0
     kalman_measurement_noise: float = 12.0
@@ -96,7 +94,6 @@ class TrackingConfig:
 class FeatureConfig:
     fps_default: float = 30.0       # used when a source has no fps metadata
     traj_min_positions: int = 5     # minimum positions before trajectory stats
-    speed_history_limit: int = 120
 
 
 @dataclass
@@ -111,15 +108,10 @@ class CalibrationConfig:
 class MLAnomalyConfig:
     contamination: float = 0.08
     per_object_window: int = 40     # rolling window of own features for IsolationForest
-    scene_cluster_k_min: int = 2
-    scene_cluster_k_max: int = 4
 
 
 @dataclass
 class RuleConfig:
-    speed_pctl_fast: float = 0.90    # > p90 of calibrated speed distribution => fast rule
-    speed_pctl_slow: float = 0.10
-    max_z: float = 3.0               # z-score cap per rule evidence
     loiter_seconds: float = 3.0
     loiter_stationary_factor: float = 1.5  # net move < this x object size => loitering
     direction_dev_deg: float = 45.0  # past this angle off dominant flow => direction rule

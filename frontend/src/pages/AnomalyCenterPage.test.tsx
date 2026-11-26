@@ -187,15 +187,10 @@ function config() {
     anomaly: {
       contamination: 0.05,
       per_object_window: 30,
-      scene_cluster_k_min: 2,
-      scene_cluster_k_max: 6,
       threshold_suspicious: 0.4,
       threshold_irregular: 0.7,
       weights: { rule: 0.5, ml: 0.3, scene: 0.2 },
       rule: {
-        speed_pctl_fast: 95,
-        speed_pctl_slow: 5,
-        max_z: 3,
         loiter_seconds: 3,
         direction_dev_deg: 45,
       },

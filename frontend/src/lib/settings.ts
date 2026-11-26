@@ -20,7 +20,6 @@ export interface SettingsDraft {
   tracking: {
     max_age: string;
     min_hits: string;
-    iou_gate: string;
     position_gate_px: string;
     kalman_process_noise: string;
     kalman_measurement_noise: string;
@@ -34,8 +33,6 @@ export interface SettingsDraft {
   anomaly: {
     contamination: string;
     per_object_window: string;
-    scene_cluster_k_min: string;
-    scene_cluster_k_max: string;
     threshold_suspicious: string;
     threshold_irregular: string;
     weight_rule: string;
@@ -65,7 +62,6 @@ export function draftFromConfig(config: EngineConfig): SettingsDraft {
     tracking: {
       max_age: input(config.tracking.max_age),
       min_hits: input(config.tracking.min_hits),
-      iou_gate: input(config.tracking.iou_gate),
       position_gate_px: input(config.tracking.position_gate_px),
       kalman_process_noise: input(config.tracking.kalman_process_noise),
       kalman_measurement_noise: input(config.tracking.kalman_measurement_noise),
@@ -79,8 +75,6 @@ export function draftFromConfig(config: EngineConfig): SettingsDraft {
     anomaly: {
       contamination: input(config.anomaly.contamination),
       per_object_window: input(config.anomaly.per_object_window),
-      scene_cluster_k_min: input(config.anomaly.scene_cluster_k_min),
-      scene_cluster_k_max: input(config.anomaly.scene_cluster_k_max),
       threshold_suspicious: input(config.anomaly.threshold_suspicious),
       threshold_irregular: input(config.anomaly.threshold_irregular),
       weight_rule: input(config.anomaly.weights.rule),
@@ -193,11 +187,6 @@ export function validateDraft(draft: SettingsDraft): Record<string, string> {
     integer: true,
     label: "Min hits",
   });
-  validateNumber(errors, "tracking.iou_gate", draft.tracking.iou_gate, {
-    min: 0,
-    max: 1,
-    label: "IoU gate",
-  });
   validateNumber(errors, "tracking.position_gate_px", draft.tracking.position_gate_px, {
     min: 0,
     max: 5000,
@@ -253,18 +242,6 @@ export function validateDraft(draft: SettingsDraft): Record<string, string> {
     integer: true,
     label: "Per-object window",
   });
-  validateNumber(errors, "anomaly.scene_cluster_k_min", draft.anomaly.scene_cluster_k_min, {
-    min: 1,
-    max: 50,
-    integer: true,
-    label: "Scene clusters min",
-  });
-  validateNumber(errors, "anomaly.scene_cluster_k_max", draft.anomaly.scene_cluster_k_max, {
-    min: 1,
-    max: 50,
-    integer: true,
-    label: "Scene clusters max",
-  });
   validateNumber(errors, "anomaly.threshold_suspicious", draft.anomaly.threshold_suspicious, {
     min: 0,
     max: 1,
@@ -290,18 +267,6 @@ export function validateDraft(draft: SettingsDraft): Record<string, string> {
     max: 1,
     label: "Scene weight",
   });
-
-  const clusterMin = parse(draft.anomaly.scene_cluster_k_min);
-  const clusterMax = parse(draft.anomaly.scene_cluster_k_max);
-  if (
-    !errors["anomaly.scene_cluster_k_min"] &&
-    !errors["anomaly.scene_cluster_k_max"] &&
-    clusterMin !== null &&
-    clusterMax !== null &&
-    clusterMax < clusterMin
-  ) {
-    errors["anomaly.scene_cluster_k_max"] = "Scene clusters max must be at least the minimum.";
-  }
 
   const suspicious = parse(draft.anomaly.threshold_suspicious);
   const irregular = parse(draft.anomaly.threshold_irregular);
@@ -350,7 +315,6 @@ function buildPatch(draft: SettingsDraft): Record<string, unknown> {
     tracking: {
       max_age: parse(draft.tracking.max_age),
       min_hits: parse(draft.tracking.min_hits),
-      iou_gate: parse(draft.tracking.iou_gate),
       position_gate_px: parse(draft.tracking.position_gate_px),
       kalman_process_noise: parse(draft.tracking.kalman_process_noise),
       kalman_measurement_noise: parse(draft.tracking.kalman_measurement_noise),
@@ -364,8 +328,6 @@ function buildPatch(draft: SettingsDraft): Record<string, unknown> {
     anomaly: {
       contamination: parse(draft.anomaly.contamination),
       per_object_window: parse(draft.anomaly.per_object_window),
-      scene_cluster_k_min: parse(draft.anomaly.scene_cluster_k_min),
-      scene_cluster_k_max: parse(draft.anomaly.scene_cluster_k_max),
       threshold_suspicious: parse(draft.anomaly.threshold_suspicious),
       threshold_irregular: parse(draft.anomaly.threshold_irregular),
       weights: {

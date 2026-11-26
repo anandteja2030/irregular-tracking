@@ -12,7 +12,6 @@ const CONFIG: EngineConfig = {
   tracking: {
     max_age: 30,
     min_hits: 3,
-    iou_gate: 0.3,
     position_gate_px: 80,
     kalman_process_noise: 0.03,
     kalman_measurement_noise: 0.5,
@@ -21,15 +20,10 @@ const CONFIG: EngineConfig = {
   anomaly: {
     contamination: 0.05,
     per_object_window: 50,
-    scene_cluster_k_min: 2,
-    scene_cluster_k_max: 6,
     threshold_suspicious: 0.55,
     threshold_irregular: 0.75,
     weights: { rule: 0.5, ml: 0.3, scene: 0.2 },
     rule: {
-      speed_pctl_fast: 0.9,
-      speed_pctl_slow: 0.1,
-      max_z: 3,
       loiter_seconds: 4,
       direction_dev_deg: 60,
     },
@@ -189,7 +183,6 @@ describe("system settings", () => {
       tracking: {
         max_age: 45,
         min_hits: 3,
-        iou_gate: 0.3,
         position_gate_px: 80,
         kalman_process_noise: 0.03,
         kalman_measurement_noise: 0.5,

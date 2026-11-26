@@ -92,15 +92,10 @@ export interface ZoneRect {
 export interface AnomalyConfig {
   contamination: number;
   per_object_window: number;
-  scene_cluster_k_min: number;
-  scene_cluster_k_max: number;
   threshold_suspicious: number;
   threshold_irregular: number;
   weights: { rule: number; ml: number; scene: number };
   rule: {
-    speed_pctl_fast: number;
-    speed_pctl_slow: number;
-    max_z: number;
     loiter_seconds: number;
     direction_dev_deg: number;
   };
@@ -125,7 +120,6 @@ export interface EngineConfig {
   tracking: {
     max_age: number;
     min_hits: number;
-    iou_gate: number;
     position_gate_px: number;
     kalman_process_noise: number;
     kalman_measurement_noise: number;

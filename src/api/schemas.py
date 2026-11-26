@@ -66,7 +66,6 @@ class ColorModel(BaseModel):
     ranges: dict[str, tuple[int, int, int, int, int, int]]
     min_area: float = Field(gt=0, le=10_000_000)
     max_area: float = Field(gt=0, le=100_000_000)
-    min_contour_perimeter: float = Field(ge=0, le=100_000)
 
     @model_validator(mode="after")
     def _check_ranges(self) -> "ColorModel":
@@ -97,7 +96,6 @@ class TrackingModel(BaseModel):
 
     max_age: int = Field(ge=0, le=10_000)
     min_hits: int = Field(ge=1, le=100)
-    iou_gate: float = Field(ge=0, le=1)
     position_gate_px: float = Field(gt=0, le=5000)
     kalman_process_noise: float = Field(gt=0, le=1000)
     kalman_measurement_noise: float = Field(gt=0, le=10_000)
@@ -108,7 +106,6 @@ class FeatureModel(BaseModel):
 
     fps_default: float = Field(gt=0, le=240)
     traj_min_positions: int = Field(ge=2, le=500)
-    speed_history_limit: int = Field(ge=8, le=10_000)
 
 
 class CalibrationModel(BaseModel):
@@ -123,20 +120,10 @@ class CalibrationModel(BaseModel):
 class RuleModel(BaseModel):
     model_config = _STRICT
 
-    speed_pctl_fast: float = Field(ge=0, le=1)
-    speed_pctl_slow: float = Field(ge=0, le=1)
-    max_z: float = Field(gt=0, le=20)
     loiter_seconds: float = Field(ge=0, le=3600)
     loiter_stationary_factor: float = Field(gt=0, le=10)
     direction_dev_deg: float = Field(gt=0, le=180)
     flow_tolerance_deg: float = Field(gt=0, le=180)
-
-    @model_validator(mode="after")
-    def _percentile_order(self) -> "RuleModel":
-        if self.speed_pctl_fast <= self.speed_pctl_slow:
-            raise ValueError(
-                "speed_pctl_fast must be greater than speed_pctl_slow")
-        return self
 
 
 class WeightsModel(BaseModel):
@@ -162,8 +149,6 @@ class AnomalyModel(BaseModel):
 
     contamination: float = Field(gt=0, le=0.5)
     per_object_window: int = Field(ge=5, le=10_000)
-    scene_cluster_k_min: int = Field(ge=1, le=50)
-    scene_cluster_k_max: int = Field(ge=1, le=50)
     rule: RuleModel
     weights: WeightsModel
     threshold_suspicious: float = Field(ge=0, le=1)
@@ -174,9 +159,6 @@ class AnomalyModel(BaseModel):
         if self.threshold_suspicious >= self.threshold_irregular:
             raise ValueError(
                 "threshold_suspicious must be lower than threshold_irregular")
-        if self.scene_cluster_k_max < self.scene_cluster_k_min:
-            raise ValueError(
-                "scene_cluster_k_max must be >= scene_cluster_k_min")
         return self
 
 
