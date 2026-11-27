@@ -89,9 +89,16 @@ export function AppRoutes() {
   );
 }
 
+/**
+ * GitHub Pages serves this project from `/<repo>/`, so the router has to mount
+ * under the build base path. Vite exposes it as BASE_URL (with a trailing
+ * slash); a root deployment keeps "/".
+ */
+const ROUTER_BASE = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "") || "/";
+
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASE}>
       <ApiHealthProvider>
         <AppRoutes />
       </ApiHealthProvider>
