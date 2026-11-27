@@ -1,0 +1,63 @@
+name: Deploy console to GitHub Pages
+
+# GitHub Pages serves static files only. It hosts the console (the React UI) and
+# cannot run the Python/FastAPI analysis engine, so the deployed console talks to
+# a backend reachable at the VITE_API_BASE_URL repository variable. Without that
+# variable the console loads and reports the service as unreachable — it does not
+# pretend live analysis is working.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        env:
+          # Repository name on github.com/anandteja2030/irregular-tracking.
+          VITE_BASE_PATH: /irregular-tracking/
+          # Settings → Secrets and variables → Actions → Variables.
+          # Example: https://analysis.example.com/api/v1
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

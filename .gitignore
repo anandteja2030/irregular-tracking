@@ -32,3 +32,4 @@ artifacts/
 .vscode/
 # Local build/serve logs and scratch scripts
 .build/
+frontend/dist/
