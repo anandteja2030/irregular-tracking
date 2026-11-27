@@ -567,6 +567,26 @@ class MetricsModel(BaseModel):
     fpr: float
     accuracy: float
     n_labeled: int
+    roc_auc: float | None = None
+
+
+class RocPoint(BaseModel):
+    model_config = _STRICT
+
+    fpr: float
+    tpr: float
+
+
+class RocModel(BaseModel):
+    model_config = _STRICT
+
+    available: bool
+    auc: float | None
+    points: list[RocPoint]
+    positives: int
+    negatives: int
+    excluded: int
+    reason: str | None
 
 
 class EvaluationResponse(BaseModel):
@@ -576,6 +596,7 @@ class EvaluationResponse(BaseModel):
     available: bool
     computable: bool
     metrics: MetricsModel | None
+    roc: RocModel | None = None
     reason: str | None
     labeled_observations: int
     total_observations: int

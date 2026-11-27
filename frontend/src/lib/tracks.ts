@@ -10,6 +10,7 @@ import type {
   TrackItem,
   TrajectoryPoint,
 } from "./types";
+import { formatNumber } from "./format";
 
 export type TrackLevelFilter = "all" | "any" | "Irregular" | "Suspicious" | "Normal";
 export type TrackSort = "anomalies" | "speed" | "track_id" | "first_frame";
@@ -54,6 +55,78 @@ export function appearanceLabel(appearance: TrackAppearance | null | undefined):
     return `${appearance.color}${appearance.shape ? ` · ${appearance.shape}` : ""}`;
   }
   return "class not reported";
+}
+
+/** Correct indefinite article for a label: "an orange polygon", "a green circle". */
+function article(label: string): string {
+  return /^[aeiou]/i.test(label.trim()) ? "an" : "a";
+}
+
+/** The object in ordinary words: "a green circle", "a Car". */
+export function objectKind(appearance: TrackAppearance | null | undefined): string {
+  const detected = classLabel(appearance);
+  if (detected) return `${article(detected)} ${detected}`;
+  const colour = appearance?.color?.trim().toLowerCase() ?? "";
+  const shape = appearance?.shape?.trim().toLowerCase() ?? "";
+  if (colour && shape) return `${article(colour)} ${colour} ${shape}`;
+  if (colour) return `${article(colour)} ${colour} object`;
+  if (shape) return `${article(shape)} ${shape}`;
+  return "an object the engine tracked without a colour or class label";
+}
+
+export interface TrackReading {
+  /** One sentence saying what the tracked thing is and when it was visible. */
+  identity: string;
+  /** One sentence saying what it measurably did during the run. */
+  behaviour: string;
+}
+
+function joinSentence(parts: string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** A plain-language reading of one tracked object, built only from the measured
+ * fields the API stored. Nothing is inferred beyond those values: a missing
+ * measurement is left out of the sentence instead of being shown as zero. */
+export function trackReading(track: TrackItem): TrackReading {
+  const kind = objectKind(track.appearance);
+  const first = track.frames.first;
+  const last = track.frames.last;
+  const span =
+    first !== null && last !== null
+      ? `from frame ${formatNumber(first)} to frame ${formatNumber(last)}`
+      : "over a frame span that was not retained";
+  const seconds =
+    track.observed.duration_s === null
+      ? ""
+      : ` (${track.observed.duration_s.toFixed(1)} s on screen)`;
+  const observations = `${formatNumber(track.observed.observations)} observation${
+    track.observed.observations === 1 ? "" : "s"
+  }`;
+
+  const identity = `${formatTrackId(track.track_id)} is ${kind} the engine followed ${span}${seconds}, recorded in ${observations}.`;
+
+  const parts: string[] = [];
+  if (track.motion.mean_speed_px_s !== null) {
+    parts.push(`averaged ${track.motion.mean_speed_px_s.toFixed(0)} px/s`);
+  }
+  if (track.motion.max_speed_px_s !== null) {
+    parts.push(`peaked at ${track.motion.max_speed_px_s.toFixed(0)} px/s`);
+  }
+  if (track.motion.path_length_px !== null) {
+    parts.push(`travelled ${formatNumber(Math.round(track.motion.path_length_px))} px of path`);
+  }
+  if (track.motion.summary_directions.length > 0) {
+    parts.push(`moved ${track.motion.summary_directions.join(" and ")}`);
+  }
+
+  const behaviour =
+    parts.length === 0
+      ? "No speed, path or heading measurement was retained for this object, so its movement cannot be described here."
+      : `It ${joinSentence(parts)}.`;
+
+  return { identity, behaviour };
 }
 
 /** Query parameters accepted by GET /sessions/{id}/tracks. */
@@ -220,6 +293,24 @@ export function pointAtFrame(
 ): TrajectoryPoint | null {
   if (frame === null) return null;
   return points.find((point) => point.frame === frame) ?? null;
+}
+
+/** The last source frame that a retained preview stands for. Previews keep one
+ * frame every `stride` source frames, so the preview at `frame` covers the
+ * interval up to the next retained frame (or `frame + stride - 1` at the end).
+ * Matching events to a preview by exact frame equality leaves almost every
+ * preview empty; this window is what a preview actually shows. */
+export function eventFrameWindow(
+  frames: { frame: number }[],
+  frame: number,
+  stride: number,
+): number {
+  const next = frames
+    .map((entry) => entry.frame)
+    .filter((candidate) => candidate > frame)
+    .sort((a, b) => a - b)[0];
+  if (next !== undefined) return Math.max(frame, next - 1);
+  return frame + Math.max(1, stride) - 1;
 }
 
 export function nearestFrame(frames: number[], target: number): number | null {

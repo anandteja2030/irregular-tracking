@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { ResourceState } from "../hooks/useResource";
 import { useResource } from "../hooks/useResource";
 import type {
@@ -9,12 +10,13 @@ import type {
 } from "../lib/types";
 import { api, mediaUrl } from "../lib/api";
 import { stepPreviewFrame } from "../lib/studio";
-import { classLabel, nearestFrame } from "../lib/tracks";
+import { classLabel, eventFrameWindow, nearestFrame, trackReading } from "../lib/tracks";
 import { ruleLabel } from "../lib/anomalies";
 import { formatClock, formatNumber } from "../lib/format";
 import { EmptyState, ErrorState, LoadingRows } from "./StateViews";
 import { LevelBadge, Score } from "./SessionBits";
 import { ImageIcon, RefreshIcon } from "./icons";
+import { AnnotatedRecap } from "./AnnotatedRecap";
 
 type Kind = "annotated" | "original";
 
@@ -186,6 +188,14 @@ function FrameEventReading({
 
       <dl className="frame-reading__grid">
         <div>
+          <dt>The object</dt>
+          <dd>
+            {track
+              ? trackReading(track).identity
+              : `Track ${String(event.track_id).padStart(2, "0")}; its aggregate measurements were not loaded into this view.`}
+          </dd>
+        </div>
+        <div>
           <dt>What changed</dt>
           <dd>{what.join("; ")}.</dd>
         </div>
@@ -226,8 +236,10 @@ export function FrameInvestigator({
   const [kind, setKind] = useState<Kind>("annotated");
   const [broken, setBroken] = useState<string | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const frames = media.data?.frames ?? [];
+  const stride = Math.max(1, media.data?.preview_stride ?? 1);
   const frame = frames[Math.min(index, Math.max(0, frames.length - 1))] ?? null;
   const src = frame
     ? mediaUrl(kind === "annotated" ? frame.annotated_url : frame.original_url)
@@ -267,9 +279,42 @@ export function FrameInvestigator({
     setFocusNote(null);
   };
 
+  /** Jump to the retained preview that covers a source frame. */
+  const jumpToFrame = (target: number) => {
+    const nearest = nearestFrame(frames.map((entry) => entry.frame), target);
+    if (nearest === null) return;
+    setIndex(Math.max(0, frames.findIndex((entry) => entry.frame === nearest)));
+    setFocusNote(
+      nearest === target
+        ? null
+        : `Jumped to the retained preview nearest F${formatNumber(target)} — showing F${formatNumber(nearest)}.`,
+    );
+  };
+
+  // Previews are decimated (one retained frame every `stride` source frames),
+  // so a preview stands for an interval, not a single frame. Matching events by
+  // exact frame equality hid almost every event; the window below matches the
+  // frames this preview actually represents.
+  const windowStart = frame?.frame ?? null;
+  const windowEnd = windowStart === null ? null : eventFrameWindow(frames, windowStart, stride);
   const frameEvents = frame
-    ? (events ?? []).filter((event) => event.frame === frame.frame)
+    ? (events ?? []).filter(
+        (event) => event.frame >= frame.frame && event.frame <= (windowEnd ?? frame.frame),
+      )
     : [];
+  const nearestEvents = useMemo(() => {
+    if (!frame || frameEvents.length > 0) return [];
+    return [...(events ?? [])]
+      .sort(
+        (a, b) =>
+          Math.abs(a.frame - frame.frame) - Math.abs(b.frame - frame.frame) ||
+          a.frame - b.frame ||
+          a.event_id - b.event_id,
+      )
+      .slice(0, 3);
+    // frameEvents is derived from events and frame
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, frame?.frame, frameEvents.length]);
   const loadedEvents = events?.length ?? 0;
   const trackById = useMemo(
     () => new Map(tracks.map((track) => [track.track_id, track])),
@@ -282,8 +327,8 @@ export function FrameInvestigator({
     focusEvent &&
     frame &&
     frameEvents.length === 0 &&
-    Math.abs(frame.frame - focusEvent.frame) <=
-      Math.max(1, media.data?.preview_stride ?? 1)
+    focusEvent.frame >= frame.frame &&
+    focusEvent.frame <= (windowEnd ?? frame.frame)
       ? focusEvent
       : null;
   const readingEvents = frameEvents.length > 0 ? frameEvents : nearestFocus ? [nearestFocus] : [];
@@ -343,6 +388,15 @@ export function FrameInvestigator({
             }
             code={media.data?.annotated_video.reason}
             glyph={<ImageIcon width={17} height={17} />}
+            actions={
+              <button
+                type="button"
+                className="btn btn--quiet btn--sm"
+                onClick={() => navigate("/video-studio")}
+              >
+                Re-run a clip in Video Studio
+              </button>
+            }
           />
         ) : frame ? (
           <>
@@ -445,12 +499,16 @@ export function FrameInvestigator({
                   What this frame shows
                 </span>
                 <span className="tag">
-                  F{frame.frame} · {readingEvents.length} elevation reading
-                  {readingEvents.length === 1 ? "" : "s"}
+                  F{frame.frame}–F{windowEnd ?? frame.frame} · {readingEvents.length} elevation
+                  reading{readingEvents.length === 1 ? "" : "s"}
                 </span>
               </div>
               {readingEvents.length === 0 ? (
-                <p className="hint hint--flush">No elevated event on F{frame.frame}.</p>
+                <p className="hint hint--flush">
+                  No elevated event falls in the frames this preview stands for (F{frame.frame}–F
+                  {windowEnd ?? frame.frame}). Step to another preview, or use the nearest events
+                  listed beside the frame to jump straight to one.
+                </p>
               ) : (
                 <>
                   <div className="frame-reading__list">
@@ -476,7 +534,13 @@ export function FrameInvestigator({
         <div className="investigator__events">
           <div className="investigator__events-head">
             <span className="investigator__events-title">Events on this frame</span>
-            <span className="tag">{frame ? `F${frame.frame}` : "—"}</span>
+            <span className="tag mono">
+              {frame && windowEnd !== null && windowEnd > frame.frame
+                ? `F${frame.frame}–F${windowEnd}`
+                : frame
+                  ? `F${frame.frame}`
+                  : "—"}
+            </span>
           </div>
           {!frame || media.status !== "ready" ? (
             <p className="hint hint--flush">Frame events appear once a retained preview is selected.</p>
@@ -492,6 +556,8 @@ export function FrameInvestigator({
                 <li key={event.event_id} className="event-mini__item">
                   <div className="event-mini__line">
                     <LevelBadge level={event.level} />
+                    <span className="mono">E{event.event_id}</span>
+                    <span className="mono">F{event.frame}</span>
                     <span className="mono">T{String(event.track_id).padStart(2, "0")}</span>
                     <Score value={event.scores.fused} />
                   </div>
@@ -503,12 +569,47 @@ export function FrameInvestigator({
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : eventTotal === 0 ? (
             <p className="hint hint--flush">
-              {eventTotal === 0
-                ? "No elevated events were loaded for this view, so no frame carries event evidence."
-                : `No elevated event falls on this exact frame in the ${formatNumber(loadedEvents)} loaded events.`}
+              No elevated events were loaded for this view, so no frame carries event evidence.
             </p>
+          ) : (
+            <>
+              <p className="hint hint--flush">
+                This preview covers frames F{frame.frame}–F{windowEnd ?? frame.frame}, and none of
+                the {formatNumber(loadedEvents)} loaded elevated events falls inside that span. The
+                closest ones are listed below.
+              </p>
+              <ul className="event-mini">
+                {nearestEvents.map((event) => (
+                  <li key={event.event_id} className="event-mini__item">
+                    <div className="event-mini__line">
+                      <LevelBadge level={event.level} />
+                      <span className="mono">E{event.event_id}</span>
+                      <span className="mono">F{event.frame}</span>
+                      <span className="mono">T{String(event.track_id).padStart(2, "0")}</span>
+                      <Score value={event.scores.fused} />
+                    </div>
+                    <p className="event-mini__summary">
+                      {event.frame > frame.frame
+                        ? `${formatNumber(event.frame - frame.frame)} frame${
+                            event.frame - frame.frame === 1 ? "" : "s"
+                          } ahead of this preview.`
+                        : `${formatNumber(frame.frame - event.frame)} frame${
+                            frame.frame - event.frame === 1 ? "" : "s"
+                          } before this preview.`}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn--quiet btn--sm"
+                      onClick={() => jumpToFrame(event.frame)}
+                    >
+                      Show nearest preview
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
           {eventTotal > loadedEvents && (
             <p className="hint">
@@ -517,6 +618,15 @@ export function FrameInvestigator({
             </p>
           )}
         </div>
+
+        {sessionId && frames.length > 0 && (
+          <AnnotatedRecap
+            sessionId={sessionId}
+            frames={frames}
+            fps={context?.fps ?? null}
+            stride={media.data?.preview_stride ?? null}
+          />
+        )}
 
         <div className="investigator__notes">
           <button type="button" className="btn btn--quiet btn--sm" onClick={media.reload}>

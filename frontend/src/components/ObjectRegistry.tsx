@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AnomalyItem, Level, TrackItem } from "../lib/types";
 import { formatNumber } from "../lib/format";
-import { appearanceLabel } from "../lib/tracks";
+import { appearanceLabel, objectKind, trackReading } from "../lib/tracks";
 import { trackEvidenceSummary, type TrackEvidenceSummary } from "../lib/anomalies";
 import { LEVEL_COLOURS, LEVEL_ORDER } from "./charts";
 import { LevelVerdict, thresholdBand, type LevelThresholds } from "./LevelVerdict";
@@ -61,6 +61,7 @@ function ObjectCard({
   const navigate = useNavigate();
   const tier = TIER[track.observed.worst_level];
   const level = track.observed.worst_level;
+  const reading = trackReading(track);
   const colour = LEVEL_COLOURS[level];
   const total = Math.max(1, track.observed.observations);
   const elevated = track.observed.anomalies;
@@ -93,6 +94,20 @@ function ObjectCard({
         <span className="obj-card__class-name" style={{ color: colour }}>
           {tier.name}
         </span>
+        <span className="obj-card__class-blurb">
+          {objectKind(track.appearance)} · worst fused level {track.observed.worst_level.toLowerCase()}
+        </span>
+      </div>
+
+      <div className="obj-card__read">
+        <p>
+          <span className="obj-card__read-key mono">What it is</span>
+          {reading.identity}
+        </p>
+        <p>
+          <span className="obj-card__read-key mono">What it did</span>
+          {reading.behaviour}
+        </p>
       </div>
 
       <div className="obj-card__ribbon" role="img" aria-label={`Observation mix ${LEVEL_ORDER.map((item) => `${item} ${track.observed.levels[item] ?? 0}`).join(", ")}`}>
@@ -287,6 +302,13 @@ export function ObjectRegistry({
           An object's level is its worst measured score, and the band edges come from the running
           configuration.
         </p>
+        <p className="registry-levels__lead">
+          Read each card top to bottom: the identity badge and colour swatch say <em>which</em> object
+          this is, “What it is” names its class and how long it was visible, “What it did” states its
+          measured speed, path and heading, the observation mix and stats give the numbers behind
+          that, and “Why this object is …” quotes the rule, model and scene evidence that set its
+          level.
+        </p>
         <ul className="registry-levels__list">
           {LEVEL_ORDER.map((item) => (
             <li
@@ -301,10 +323,10 @@ export function ObjectRegistry({
               <span className="registry-level__band mono">{thresholdBand(item, thresholds)}</span>
               <span className="registry-level__meaning">
                 {item === "Normal"
-                  ? "No observation crossed the suspicious mark, so the object stayed inside its learned baseline."
+                  ? "No sustained deviation: isolated frames may have crossed a band, but too few of the object's rows repeated it to change the verdict."
                   : item === "Suspicious"
-                    ? "At least one observation crossed the suspicious mark; none reached the irregular mark."
-                    : "At least one observation reached the irregular mark, the highest band the engine reports."}
+                    ? "Elevated frames repeated across a meaningful share of the object's rows, without enough irregular frames to reach the highest band."
+                    : "Irregular frames repeated across a meaningful share of the object's rows — the highest band the engine reports."}
               </span>
             </li>
           ))}

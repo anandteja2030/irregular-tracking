@@ -143,6 +143,13 @@ export function VideoStudioPage() {
     (signal) => api.anomalies(selectedId as string, { limit: 200, sort: "score" }, signal),
     { enabled: Boolean(selectedId), key: selectedId ?? "" },
   );
+  // The frame investigation panel names each object on screen and compares its
+  // fused score with the running thresholds, so it needs the roster and config.
+  const frameTracks = useResource(
+    (signal) => api.tracks(selectedId as string, { sort: "anomalies", limit: 200 }, signal),
+    { enabled: Boolean(selectedId), key: selectedId ?? "" },
+  );
+  const config = useResource(api.config);
 
   useEffect(() => {
     try {
@@ -787,10 +794,9 @@ export function VideoStudioPage() {
           bodyClassName="panel__body--flush"
           foot={
             <>
-              <span className="dot dot--warn" />
-              {media.data
-                ? media.data.annotated_video.reason
-                : "No annotated video is produced by the engine; only retained preview frames exist."}
+              <span className="dot dot--live" />
+              Annotations are drawn onto every retained preview. Build a downloadable
+              annotated recap from those frames in the panel.
             </>
           }
         >
@@ -801,6 +807,16 @@ export function VideoStudioPage() {
               events={events.data?.anomalies ?? null}
               eventsReady={Boolean(events.data)}
               eventTotal={events.data?.total ?? 0}
+              tracks={frameTracks.data?.tracks ?? []}
+              context={{
+                width: summary.data?.processing.width ?? null,
+                height: summary.data?.processing.height ?? null,
+                fps: summary.data?.processing.fps ?? null,
+                thresholds: {
+                  suspicious: config.data?.anomaly?.threshold_suspicious ?? null,
+                  irregular: config.data?.anomaly?.threshold_irregular ?? null,
+                },
+              }}
             />
           </div>
         </Panel>

@@ -3784,31 +3784,37 @@ button:focus-visible,
   gap: 10px;
 }
 
-/* The rail carries the index and the selected object's telemetry. On a tall
-   page it used to stretch to the full row height and leave a blank gutter
-   below its last panel, so it now sticks to the top of the scroll container
-   and scrolls inside itself. */
+/* The rail carries the index, telemetry and related events. A viewport-capped
+   inner scrollbar cut its last panels off, so the rail now follows the page
+   scroll and every panel is reachable. The column is slightly wider to keep
+   long keys and values on one line. */
 .track-workspace {
   align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
 }
 
 .track-workspace__rail {
-  position: sticky;
-  top: 0;
+  position: static;
   align-self: start;
-  max-height: calc(100dvh - 170px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 4px;
+  max-height: none;
+  overflow: visible;
+  min-width: 0;
 }
 
-@media (max-width: 1180px) {
-  .track-workspace__rail {
-    position: static;
-    max-height: none;
-    overflow: visible;
-    padding-right: 0;
-  }
+.track-workspace__rail > .panel,
+.track-workspace__rail .panel__body,
+.track-workspace__rail .stack {
+  min-width: 0;
+}
+
+.track-workspace__rail .rows .row {
+  align-items: flex-start;
+}
+
+.track-workspace__rail .row__key {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------- readability pass */
@@ -5558,4 +5564,53 @@ button:focus-visible,
   .frame-reading__grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* --------------------------------------------------- plain-language object read */
+.obj-card__read {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(140, 200, 255, 0.1);
+  background: rgba(120, 190, 255, 0.04);
+}
+
+.obj-card__read p {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--ink-60);
+}
+
+.obj-card__read-key {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-30);
+}
+
+.object-read {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(140, 200, 255, 0.12);
+  background: rgba(120, 190, 255, 0.04);
+}
+
+.object-read .note__label {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.object-read .explain {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-60);
 }

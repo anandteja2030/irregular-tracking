@@ -91,6 +91,69 @@ def classification_metrics(y_true: list[str],
         f1=f1, fpr=fpr, accuracy=accuracy, n_labeled=len(y_true))
 
 
+def roc_analysis(y_true: list[str],
+                 scores: list[float | None]) -> dict:
+    """Rank-based ROC curve and AUC from the fused score stream.
+
+    The fused score is already a continuous 0-1 anomaly score, so ranking the
+    labelled observations by it gives a genuine ROC curve - no probability is
+    invented and no missing score is filled in. Observations without a stored
+    fused score are excluded and reported as such.
+    """
+    pairs = [(float(score), 1 if label == "Anomaly" else 0)
+             for label, score in zip(y_true, scores)
+             if score is not None]
+    positives = sum(1 for _, label in pairs if label == 1)
+    negatives = len(pairs) - positives
+    excluded = len(y_true) - len(pairs)
+    if positives == 0 or negatives == 0:
+        return {
+            "available": False,
+            "auc": None,
+            "points": [],
+            "positives": positives,
+            "negatives": negatives,
+            "excluded": excluded,
+            "reason": ("ROC needs both a labelled anomaly and a labelled "
+                       "normal observation with a stored fused score."),
+        }
+
+    # Descending score order, grouping ties so a tie adds one ROC step.
+    ordered = sorted(pairs, key=lambda item: -item[0])
+    curve: list[tuple[float, float]] = [(0.0, 0.0)]
+    tp = fp = 0
+    index = 0
+    while index < len(ordered):
+        score = ordered[index][0]
+        while index < len(ordered) and ordered[index][0] == score:
+            if ordered[index][1] == 1:
+                tp += 1
+            else:
+                fp += 1
+            index += 1
+        curve.append((fp / negatives, tp / positives))
+
+    # Trapezoidal area over the raw curve.
+    auc = 0.0
+    for (x0, y0), (x1, y1) in zip(curve, curve[1:]):
+        auc += (x1 - x0) * (y0 + y1) / 2.0
+
+    stride = max(1, len(curve) // 60)
+    sampled = curve[::stride]
+    if sampled[-1] != curve[-1]:
+        sampled.append(curve[-1])
+    return {
+        "available": True,
+        "auc": round(auc, 4),
+        "points": [{"fpr": round(x, 4), "tpr": round(y, 4)}
+                   for x, y in sampled],
+        "positives": positives,
+        "negatives": negatives,
+        "excluded": excluded,
+        "reason": None,
+    }
+
+
 def evaluate(obs_rows: list[dict], labels: list[dict]) -> EvaluationOutcome:
     """Join observation predictions with ground-truth labels and score them.
 

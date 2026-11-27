@@ -803,7 +803,8 @@ def test_openapi_documents_each_analytics_path_once(client):
     spec = client.get("/openapi.json").json()
     keys = [key for key in spec["paths"]
             if key.startswith("/api/v1/sessions")]
-    assert len(keys) == 18
+    assert len(keys) == 19
+    assert "/api/v1/sessions/{session_id}/labels" in keys
     assert "/sessions" not in spec["paths"]
     for path in keys:
         for operation in spec["paths"][path].values():

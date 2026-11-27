@@ -18,6 +18,7 @@ import type {
   Health,
   JobList,
   JobSnapshot,
+  LabelPayload,
   LiveFrame,
   LiveSession,
   LiveStopResult,
@@ -103,7 +104,7 @@ function timeoutSignal(ms: number): AbortSignal {
 interface RequestOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: string | FormData;
   headers?: Record<string, string>;
 }
@@ -503,10 +504,40 @@ export const api = {
     request<EvaluationResponse>(`${sessionPath(sessionId)}/evaluation`, { signal }),
   downloadExport: downloadSessionExport,
 
+  /* ---------------------------------------------------- ground truth labels */
+  labels: (sessionId: string, signal?: AbortSignal) =>
+    request<LabelPayload>(`${sessionPath(sessionId)}/labels`, { signal }),
+  saveLabels: (
+    sessionId: string,
+    body: {
+      observations?: { frame_idx: number; track_id: number; label: "Normal" | "Anomaly" }[];
+      tracks?: { track_id: number; label: "Normal" | "Anomaly" }[];
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<LabelPayload>(`${sessionPath(sessionId)}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      timeoutMs: 30_000,
+      signal,
+    }),
+  clearLabels: (sessionId: string, signal?: AbortSignal) =>
+    request<LabelPayload>(`${sessionPath(sessionId)}/labels`, {
+      method: "DELETE",
+      timeoutMs: 30_000,
+      signal,
+    }),
+
   /* ------------------------------------------------------- live camera */
-  liveStart: (signal?: AbortSignal) =>
+  liveStart: (
+    engine: "objects" | "motion" | "auto" = "auto",
+    signal?: AbortSignal,
+  ) =>
     request<{ session: LiveSession }>("/live/sessions", {
       method: "POST",
+      body: JSON.stringify({ engine }),
+      headers: { "content-type": "application/json" },
       signal,
     }),
   liveFrame: (liveId: string, frame: Blob, signal?: AbortSignal) => {

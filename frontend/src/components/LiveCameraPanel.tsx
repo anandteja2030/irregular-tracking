@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, describeError } from "../lib/api";
+import { ApiError, api, describeError } from "../lib/api";
 import type { Level, LiveFrame, LiveStopResult, LiveTrack } from "../lib/types";
 import {
   DEFAULT_LIVE_FILTERS,
-  LIVE_JPEG_QUALITY,
   LIVE_TARGET_FPS,
   appearanceColour,
+  liveObjectName,
+  calibrationPercent,
   cameraErrorMessage,
   captureSize,
   classifyLiveTracks,
   confidenceBand,
+  engineLabel,
   headingArrow,
   levelCounts,
   levelShort,
   liveElapsed,
+  resolveProfile,
   smoothBox,
   type LiveFilterSettings,
+  type LiveQuality,
   type LiveTrackView,
 } from "../lib/live";
 import { formatNumber, truncateMiddle } from "../lib/format";
@@ -74,6 +78,17 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
   const [summary, setSummary] = useState<LiveStopResult | null>(null);
   const [history, setHistory] = useState<{ frame: number; objects: number; peak: number }[]>([]);
   const [filters, setFilters] = useState<LiveFilterSettings>(DEFAULT_LIVE_FILTERS);
+  // Engine, capture quality and camera are chosen before a capture starts;
+  // changing them mid-stream would mix two measurement conditions.
+  const [engineChoice, setEngineChoice] = useState<"auto" | "objects" | "motion">("auto");
+  const [quality, setQuality] = useState<LiveQuality>("auto");
+  const [roundTrip, setRoundTrip] = useState<number | null>(null);
+  const [profileKey, setProfileKey] = useState<"high" | "balanced" | "fast">("high");
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string>("");
+  const roundTripRef = useRef(180);
+  const framesSinceSwitch = useRef(0);
+  const failuresRef = useRef(0);
   // Frames each identity has been seen in, and the smoothed box we last drew
   // for it. Both are display state: the recorded observations stay untouched.
   const seenRef = useRef<Map<number, number>>(new Map());
@@ -198,7 +213,7 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
       context.fillStyle = colour;
       context.fill();
       context.setLineDash([]);
-      const label = `T${String(track.track_id).padStart(2, "0")} · ${levelShort(track.level)} · ${track.scores.fused.toFixed(2)}${isCandidate ? " · CAND" : ""}`;
+      const label = `T${String(track.track_id).padStart(2, "0")} · ${liveObjectName(track)} · ${levelShort(track.level)} · ${track.scores.fused.toFixed(2)}${isCandidate ? " · CAND" : ""}`;
       context.font = `600 ${Math.round(13 * scale)}px "JetBrains Mono", ui-monospace, monospace`;
       const measured = context.measureText(label).width;
       const padX = 5 * scale;
@@ -218,7 +233,11 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
     const capture = captureRef.current;
     const liveId = liveIdRef.current;
     if (!video || !capture || !liveId) return;
-    const { width, height } = captureSize(video.videoWidth, video.videoHeight);
+    // Capture detail follows the measured round-trip time when quality is
+    // automatic: a slow link steps down instead of starving the tracker of
+    // frames, and a fast link keeps the pixels that small objects need.
+    const { key, profile } = resolveProfile(quality, roundTripRef.current);
+    const { width, height } = captureSize(video.videoWidth, video.videoHeight, profile.maxWidth);
     if (!width || !height) return;
     if (capture.width !== width || capture.height !== height) {
       capture.width = width;
@@ -228,11 +247,23 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
     if (!context) return;
     context.drawImage(video, 0, 0, width, height);
     const blob = await new Promise<Blob | null>((resolve) => {
-      capture.toBlob(resolve, "image/jpeg", LIVE_JPEG_QUALITY);
+      capture.toBlob(resolve, "image/jpeg", profile.jpegQuality);
     });
     if (!blob) return;
+    let result: Awaited<ReturnType<typeof api.liveFrame>>;
     try {
-      const result = await api.liveFrame(liveId, blob);
+      const sentAt = performance.now();
+      result = await api.liveFrame(liveId, blob);
+      const measured = performance.now() - sentAt;
+      roundTripRef.current = roundTripRef.current * 0.7 + measured * 0.3;
+      setRoundTrip(Math.round(roundTripRef.current));
+      failuresRef.current = 0;
+      framesSinceSwitch.current += 1;
+      if (framesSinceSwitch.current >= 12) {
+        framesSinceSwitch.current = 0;
+        setProfileKey(key);
+      }
+      if (quality === "auto" && key !== profileKey) setProfileKey(key);
       // Stability state: how long each identity has been visible, and the box
       // we actually draw for it. Filtering happens here, on the display path
       // only — the API still persists every observation it measured.
@@ -289,12 +320,25 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
         },
       ]);
     } catch (caught) {
+      // A dropped frame is not a dead capture: retry a few times, then stop
+      // only if the service is genuinely gone or the session ended.
+      const fatal =
+        caught instanceof ApiError &&
+        ["live_not_found", "live_state", "live_limit", "invalid_frame"].includes(caught.code);
+      failuresRef.current += 1;
+      if (!fatal && failuresRef.current <= 4) {
+        await new Promise((resolve) =>
+          window.setTimeout(resolve, 120 * failuresRef.current),
+        );
+        return;
+      }
       clearTimer();
       stopCamera();
       setError(describeError(caught));
       setPhase("error");
+      return;
     }
-  }, [clearTimer, drawOverlay, stopCamera]);
+  }, [clearTimer, drawOverlay, profileKey, quality, stopCamera]);
 
   const start = useCallback(async () => {
     setPhase("starting");
@@ -309,6 +353,11 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
     smoothedRef.current = new Map();
     suppressedRef.current = { candidate: 0, score: 0, size: 0 };
     lastFrameRef.current = null;
+    roundTripRef.current = 180;
+    framesSinceSwitch.current = 0;
+    failuresRef.current = 0;
+    setRoundTrip(null);
+    setProfileKey("high");
     onActiveChange?.(true);
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -318,7 +367,8 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          facingMode: { ideal: "environment" },
+          frameRate: { ideal: 30, max: 30 },
+          ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } }),
         },
         audio: false,
       });
@@ -327,7 +377,14 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
       if (!video) throw new Error("The camera stage is not mounted.");
       video.srcObject = stream;
       await video.play();
-      const created = await api.liveStart();
+      // Labels are only populated after permission is granted.
+      try {
+        const listed = await navigator.mediaDevices.enumerateDevices();
+        setDevices(listed.filter((device) => device.kind === "videoinput"));
+      } catch {
+        // Device labels are optional; capture already has a stream.
+      }
+      const created = await api.liveStart(engineChoice);
       liveIdRef.current = created.session.live_id;
       setPhase("live");
       clearTimer();
@@ -350,7 +407,7 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
       setPhase("error");
       onActiveChange?.(false);
     }
-  }, [captureOnce, clearTimer, onActiveChange, stopCamera]);
+  }, [captureOnce, clearTimer, deviceId, engineChoice, onActiveChange, stopCamera]);
 
   const stop = useCallback(async () => {
     const liveId = liveIdRef.current;
@@ -431,7 +488,8 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
         ) : (
           <>
             <span className="dot dot--warn" />
-            Frames are scored one at a time; nothing is stored until you press “Stop &amp; analyze”.
+            Frames are scored one at a time by the engine you pick; nothing is stored until you
+            press “Stop &amp; analyze”.
           </>
         )
       }
@@ -483,6 +541,78 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
             </div>
           )}
         </div>
+
+        <div className="live-setup" aria-label="Capture configuration">
+          <label className="live-setup__field">
+            <span className="mono live-setup__label">Detection engine</span>
+            <select
+              value={engineChoice}
+              onChange={(event) =>
+                setEngineChoice(event.target.value as "auto" | "objects" | "motion")
+              }
+              disabled={live || phase === "starting"}
+            >
+              <option value="auto">Auto · prefer object detector</option>
+              <option value="objects">Object detector · people, vehicles</option>
+              <option value="motion">Motion + colour · fastest</option>
+            </select>
+          </label>
+          <label className="live-setup__field">
+            <span className="mono live-setup__label">Capture quality</span>
+            <select
+              value={quality}
+              onChange={(event) => setQuality(event.target.value as LiveQuality)}
+              disabled={live || phase === "starting"}
+            >
+              <option value="auto">Auto · adapt to latency</option>
+              <option value="high">High accuracy · 1280 px</option>
+              <option value="balanced">Balanced · 960 px</option>
+              <option value="fast">Fast · 640 px</option>
+            </select>
+          </label>
+          <label className="live-setup__field">
+            <span className="mono live-setup__label">Camera</span>
+            <select
+              value={deviceId}
+              onChange={(event) => setDeviceId(event.target.value)}
+              disabled={live || phase === "starting"}
+            >
+              <option value="">Default camera</option>
+              {devices.map((device, index) => (
+                <option key={device.deviceId || index} value={device.deviceId}>
+                  {device.label || `Camera ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {(live || frame) && (
+          <div className="live-engine mono" aria-live="off">
+            <span className={`live-engine__chip live-engine__chip--${frame?.engine ?? "motion"}`}>
+              {engineLabel(frame?.engine)}
+            </span>
+            <span>
+              baseline {" "}
+              <b>{frame?.calibration ? `${calibrationPercent(frame.calibration)}%` : "—"}</b>
+              {frame?.calibration && !frame.calibration.ready
+                ? ` · ${formatNumber(frame.calibration.samples)}/${formatNumber(
+                    frame.calibration.needed,
+                  )} samples`
+                : " · ready"}
+            </span>
+            <span>
+              round trip <b>{roundTrip === null ? "—" : `${roundTrip} ms`}</b>
+            </span>
+            <span>
+              engine <b>{frame?.process_ms == null ? "—" : `${frame.process_ms.toFixed(0)} ms`}</b>
+            </span>
+            <span className="dim">
+              capture {resolveProfile(quality, roundTrip ?? 180).key} ·{" "}
+              {resolveProfile(quality, roundTrip ?? 180).profile.note}
+            </span>
+          </div>
+        )}
 
         <div className="live-filter" role="group" aria-label="Live detection stability">
           <div className="live-filter__head">
@@ -738,7 +868,7 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
                 .sort((a, b) => b.scores.fused - a.scores.fused)
                 .map((track) => ({
                   key: String(track.track_id),
-                  label: `T${String(track.track_id).padStart(2, "0")} · ${track.color ?? "—"}`,
+                  label: `T${String(track.track_id).padStart(2, "0")} · ${liveObjectName(track)}`,
                   value: track.scores.fused,
                   color: LEVEL_COLOURS[track.level],
                 }))}
@@ -773,6 +903,7 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
                         T{String(track.track_id).padStart(2, "0")}
                       </span>
                       <LevelBadge level={track.level} />
+                      <span className="tag tag--class">{liveObjectName(track)}</span>
                       <span className="tag">{track.color ?? "colour —"}</span>
                       <span className="tag">{track.shape ?? "shape —"}</span>
                       <span
@@ -800,6 +931,20 @@ export function LiveCameraPanel({ onFinished, onActiveChange }: LiveCameraPanelP
                         <span>
                           fused <Score value={track.scores.fused} />{" "}
                           <span className="dim">({confidenceBand(track.scores.fused)})</span>
+                        </span>
+                        <span>
+                          stable{" "}
+                          <b>
+                            {typeof track.fused_smoothed === "number"
+                              ? track.fused_smoothed.toFixed(2)
+                              : "—"}
+                          </b>
+                          {typeof track.level_stability === "number" && (
+                            <span className="dim">
+                              {" "}
+                              · {Math.round(track.level_stability * 100)}% same level
+                            </span>
+                          )}
                         </span>
                       </div>
                     </div>

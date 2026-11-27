@@ -12,6 +12,86 @@ export const LIVE_TARGET_FPS = 12;
 export const LIVE_CAPTURE_MAX_WIDTH = 1280;
 export const LIVE_JPEG_QUALITY = 0.82;
 
+export type LiveQuality = "auto" | "high" | "balanced" | "fast";
+export type LiveProfileKey = Exclude<LiveQuality, "auto">;
+
+export interface CaptureProfile {
+  maxWidth: number;
+  jpegQuality: number;
+  label: string;
+  note: string;
+}
+
+/**
+ * Capture profiles trade image detail against round-trip time. Detail matters:
+ * a distant person is only a few dozen pixels wide, and downscaling too far
+ * makes detection and re-identification less reliable.
+ */
+export const LIVE_PROFILES: Record<LiveProfileKey, CaptureProfile> = {
+  high: {
+    maxWidth: 1280,
+    jpegQuality: 0.9,
+    label: "High accuracy",
+    note: "1280 px · 90% JPEG",
+  },
+  balanced: {
+    maxWidth: 960,
+    jpegQuality: 0.85,
+    label: "Balanced",
+    note: "960 px · 85% JPEG",
+  },
+  fast: {
+    maxWidth: 640,
+    jpegQuality: 0.74,
+    label: "Fast",
+    note: "640 px · 74% JPEG",
+  },
+};
+
+/** Pick a capture profile; `auto` follows the measured round-trip time. */
+export function resolveProfile(
+  quality: LiveQuality,
+  smoothedRoundTripMs: number,
+): { key: LiveProfileKey; profile: CaptureProfile } {
+  if (quality !== "auto") return { key: quality, profile: LIVE_PROFILES[quality] };
+  if (smoothedRoundTripMs >= 550) return { key: "fast", profile: LIVE_PROFILES.fast };
+  if (smoothedRoundTripMs >= 300) return { key: "balanced", profile: LIVE_PROFILES.balanced };
+  return { key: "high", profile: LIVE_PROFILES.high };
+}
+
+/** 0–100 scene-baseline progress, never above 100. */
+export function calibrationPercent(
+  calibration: { progress?: number; samples?: number; needed?: number } | null | undefined,
+): number {
+  if (!calibration) return 0;
+  const progress =
+    typeof calibration.progress === "number"
+      ? calibration.progress
+      : (calibration.samples ?? 0) / Math.max(calibration.needed ?? 1, 1);
+  if (!Number.isFinite(progress)) return 0;
+  return Math.round(Math.min(1, Math.max(0, progress)) * 100);
+}
+
+/**
+ * What the engine called the object. The pretrained detector reports real
+ * classes ("person", "car"); the colour/shape engine can only describe what it
+ * saw, so its description is used verbatim instead of inventing a class.
+ */
+export function liveObjectName(
+  track: Pick<LiveTrack, "class_name" | "color" | "shape">,
+): string {
+  if (track.class_name) return track.class_name;
+  const described = [track.color, track.shape].filter(Boolean).join(" ");
+  return described || "unclassified";
+}
+
+/** Human label for the engine that actually scored a frame. */
+export function engineLabel(engine: "objects" | "motion" | undefined): string {
+  if (engine === "objects") return "object detector";
+  if (engine === "motion") return "motion + colour";
+  return "engine unknown";
+}
+
 export interface CaptureSize {
   width: number;
   height: number;
@@ -163,7 +243,7 @@ export interface LiveFilterSettings {
 export const DEFAULT_LIVE_FILTERS: LiveFilterSettings = {
   showCandidates: false,
   minScore: 0,
-  minAreaPct: 0.15,
+  minAreaPct: 0.1,
   confirmFrames: 3,
   smoothing: 0.45,
 };

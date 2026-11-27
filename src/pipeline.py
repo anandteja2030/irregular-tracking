@@ -148,6 +148,14 @@ class TrackingPipeline:
         mask = self._bg.apply(gray)
         if self._bg_frames <= 1:
             return np.zeros_like(gray)
+        # A camera that is re-exposed, auto-gained or nudged marks almost the
+        # whole frame as "changed". That is a lighting event, not object
+        # motion, so the mask is discarded and the model is re-adapted quickly
+        # instead of turning the entire scene into one giant track.
+        changed = float(np.count_nonzero(mask)) / float(mask.size)
+        if changed > 0.45:
+            self._bg.apply(gray, learningRate=0.15)
+            return np.zeros_like(gray)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)

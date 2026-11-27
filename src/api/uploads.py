@@ -197,6 +197,32 @@ def clear_all() -> int:
     return removed
 
 
+def clear_all_measured() -> tuple[int, int]:
+    """Like :func:`clear_all`, but also removes orphan files in the upload
+    directory and reports ``(files_removed, bytes_removed)``.
+
+    An orphan is a file the registry no longer tracks (for example after an API
+    restart); the purge is meant to leave the application with no uploaded
+    video on disk, so those count too.
+    """
+    directory = upload_dir()
+    removed = clear_all()
+    removed_bytes = 0
+    try:
+        candidates = [path for path in directory.iterdir() if path.is_file()]
+    except OSError:
+        candidates = []
+    for path in candidates:
+        try:
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            removed += 1
+            removed_bytes += size
+        except OSError:
+            continue
+    return removed, removed_bytes
+
+
 def cleanup_stale(active_refs: Iterable[str] | None = None) -> int:
     """Delete upload files past their TTL that no active job still needs."""
     keep = set(active_refs or ())

@@ -498,6 +498,15 @@ export interface UploadRecord {
 
 /* ------------------------------------------------------------- live camera */
 
+export interface LiveCalibration {
+  ready: boolean;
+  samples: number;
+  needed: number;
+  tracks: number;
+  progress: number;
+  median_speed: number;
+}
+
 export interface LiveTrack {
   track_id: number;
   /** Pixel box in the posted frame: `[x, y, width, height]`. */
@@ -521,6 +530,10 @@ export interface LiveTrack {
   misses?: number;
   /** Frames this identity has actually been observed in. */
   frames_seen?: number;
+  /** Recent running average of the measured fused score (display only). */
+  fused_smoothed?: number;
+  /** Share of the last frames whose measured level matched this frame's. */
+  level_stability?: number | null;
 }
 
 export interface LiveCounts {
@@ -546,6 +559,12 @@ export interface LiveFrame {
   tracks: LiveTrack[];
   counts: LiveCounts;
   elapsed_s: number;
+  /** Which detection engine scored this frame. */
+  engine?: "objects" | "motion";
+  /** Server-side pipeline time for this frame, in milliseconds. */
+  process_ms?: number;
+  /** Scene baseline learning progress, so early frames are interpretable. */
+  calibration?: LiveCalibration;
 }
 
 export interface LiveSession {
@@ -562,6 +581,8 @@ export interface LiveSession {
   levels: Record<Level, number>;
   elapsed_s: number;
   limits: { max_frames: number; max_frame_bytes: number };
+  engine?: "objects" | "motion";
+  calibration?: LiveCalibration;
 }
 
 export interface LiveStopResult {
@@ -647,6 +668,25 @@ export interface SessionDetail extends SessionItem {
   limitations: string[];
 }
 
+export interface GroundTruthLabel {
+  frame_idx: number;
+  track_id: number;
+  label: "Normal" | "Anomaly";
+}
+
+export interface LabelPayload {
+  session: string;
+  count: number;
+  counts: Record<string, number>;
+  labels: GroundTruthLabel[];
+  /** Rows written by the last POST. */
+  saved?: number;
+  /** Rows deleted by the last DELETE. */
+  removed?: number;
+  /** Rows expanded from track-level labels in the last POST. */
+  expanded_from_tracks?: number;
+}
+
 export interface PreviewFrameInfo {
   frame: number;
   ts_s: number;
@@ -676,8 +716,23 @@ export interface EvaluationMetrics {
   fpr: number;
   accuracy: number;
   n_labeled: number;
-  /** Reserved for an API that exposes ranked scores. Current API omits it. */
+  /** Rank-based AUC of the persisted fused score against the same labels. */
   roc_auc?: number | null;
+}
+
+export interface RocPoint {
+  fpr: number;
+  tpr: number;
+}
+
+export interface RocAnalysis {
+  available: boolean;
+  auc: number | null;
+  points: RocPoint[];
+  positives: number;
+  negatives: number;
+  excluded: number;
+  reason: string | null;
 }
 
 /** Measured counts returned by the explicit data purge. */
@@ -692,6 +747,12 @@ export interface PurgedCounts {
   artifacts: number;
   uploads: number;
   live_cancelled: number;
+  /** Present on current builds: the factory-reset details. */
+  upload_bytes?: number;
+  tables_cleared?: number;
+  database_bytes?: number;
+  config_reset?: number;
+  config_changes?: string[];
 }
 
 export interface PurgeResponse {
@@ -741,4 +802,6 @@ export interface EvaluationResponse {
   label_counts: Record<string, number>;
   predicted_positive: number;
   positive_rule: string;
+  /** Ranked ROC over the same matched labels; null on older API builds. */
+  roc?: RocAnalysis | null;
 }

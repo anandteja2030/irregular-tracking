@@ -531,6 +531,22 @@ def track_observations(session: str, track_id: int, *, level: str | None = None,
     return total, [event_item(dict(r)) for r in rows]
 
 
+def track_frame_indices(session: str, track_id: int) -> list[int]:
+    """Every persisted frame index for one track, ascending.
+
+    Used to expand a track-level ground-truth label onto the observations the
+    run actually stored, so labelling never invents a frame.
+    """
+    with connect() as conn:
+        if conn is None or not _has_table(conn, "track_events"):
+            return []
+        rows = conn.execute(
+            "SELECT DISTINCT frame_idx FROM track_events WHERE session = ?"
+            " AND track_id = ? ORDER BY frame_idx",
+            (session, track_id)).fetchall()
+    return [int(r[0]) for r in rows]
+
+
 def track_frames(session: str, track_id: int, *, limit: int = 100,
                  offset: int = 0) -> tuple[int, list[dict]]:
     with connect() as conn:
@@ -755,11 +771,13 @@ def evaluation_observations(session: str) -> list[dict]:
         if conn is None or not _has_table(conn, "track_events"):
             return []
         rows = conn.execute(
-            "SELECT frame_idx, track_id, level FROM track_events"
+            "SELECT frame_idx, track_id, level, fused_score FROM track_events"
             " WHERE session = ? ORDER BY frame_idx, track_id",
             (session,)).fetchall()
     return [{"frame": int(r["frame_idx"]), "track_id": int(r["track_id"]),
-             "level": r["level"]} for r in rows]
+             "level": r["level"],
+             "fused_score": (None if r["fused_score"] is None
+                             else float(r["fused_score"]))} for r in rows]
 
 
 # -------------------------------------------------------------------- export

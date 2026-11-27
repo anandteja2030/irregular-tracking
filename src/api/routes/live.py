@@ -8,7 +8,8 @@ like any file-based run.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from src.api.errors import api_error
 from src.api.live import (
@@ -38,12 +39,28 @@ def _translate(exc: Exception) -> HTTPException:
     return api_error(500, "live_failed", str(exc))
 
 
+class LiveCreateRequest(BaseModel):
+    """Optional engine choice for a webcam capture.
+
+    ``objects`` runs the pretrained COCO detector (class names such as person
+    or car), ``motion`` the colour + background-subtraction path, and ``auto``
+    prefers the detector when its model files are present.
+    """
+
+    engine: str = "auto"
+
+
 @router.post("/sessions", status_code=201,
              summary="Open a live camera session",
              responses={429: {"description": "Too many concurrent captures"}})
-def create_live_session() -> dict:
+def create_live_session(
+        request: LiveCreateRequest | None = Body(default=None)) -> dict:
+    requested = (request.engine if request is not None else "auto").lower()
+    if requested not in ("objects", "motion", "auto"):
+        raise api_error(422, "invalid_engine",
+                        "engine must be 'objects', 'motion' or 'auto'.")
     try:
-        return {"session": manager.create()}
+        return {"session": manager.create(engine=requested)}  # type: ignore[arg-type]
     except LiveLimitError as exc:
         raise _translate(exc) from exc
 

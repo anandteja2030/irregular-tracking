@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -59,7 +60,10 @@ def frames() -> list[bytes]:
 
 
 def _open(client: TestClient) -> str:
-    response = client.post("/api/v1/live/sessions")
+    # The bundled sample clips are synthetic shapes, so these tests exercise
+    # the colour + motion engine explicitly; the COCO engine is covered by its
+    # own test below.
+    response = client.post("/api/v1/live/sessions", json={"engine": "motion"})
     assert response.status_code == 201, response.text
     return response.json()["session"]["live_id"]
 
@@ -206,3 +210,34 @@ def test_frame_paths_get_their_own_body_budget() -> None:
     assert frame < upload
     assert frame > other
     assert middleware._limit_for({"path": "/live/sessions/live_ab12/frames"}) == frame
+
+
+def test_engine_selection_is_explicit_and_validated(client: TestClient) -> None:
+    """A caller can choose the engine, and a bad name is rejected, not guessed."""
+    response = client.post("/api/v1/live/sessions", json={"engine": "motion"})
+    assert response.status_code == 201, response.text
+    motion = response.json()["session"]
+    assert motion["engine"] == "motion"
+    assert motion["calibration"]["needed"] >= 1
+    client.post(f"/api/v1/live/sessions/{motion['live_id']}/cancel")
+
+    bad = client.post("/api/v1/live/sessions", json={"engine": "magic"})
+    assert bad.status_code == 422
+    assert bad.json()["error"]["code"] == "invalid_engine"
+
+
+def test_object_engine_reports_real_class_names_when_model_present(
+        client: TestClient) -> None:
+    """With the COCO model shipped, webcam frames use class names, not colours."""
+    created = client.post("/api/v1/live/sessions", json={"engine": "objects"})
+    assert created.status_code == 201, created.text
+    session = created.json()["session"]
+    if session["engine"] != "objects":
+        pytest.skip("COCO model files are not installed in this environment")
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    ok, buffer = cv2.imencode(".jpg", frame)
+    assert ok
+    payload = _post(client, session["live_id"], buffer.tobytes()).json()
+    assert payload["engine"] == "objects"
+    assert payload["calibration"]["progress"] <= 1.0
+    client.post(f"/api/v1/live/sessions/{session['live_id']}/cancel")

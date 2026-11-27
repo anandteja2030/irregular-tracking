@@ -17,7 +17,7 @@ import { SceneMovement } from "../components/SceneMovement";
 import { SceneSpatial } from "../components/SceneSpatial";
 import { SceneInvestigation } from "../components/SceneInvestigation";
 import { SceneQuantum } from "../components/SceneQuantum";
-import { ObjectRegistry } from "../components/ObjectRegistry";
+import { SceneObjectAtlas } from "../components/SceneObjectAtlas";
 
 const FETCH_CHUNK = 500;
 const MAX_EVENTS = 2_000;
@@ -200,18 +200,13 @@ export function SceneIntelligencePage() {
             />
           </section>
 
-          <section className="scene-registry-band" aria-label="Tracked objects in this scene">
-            <ObjectRegistry
-              tracks={tracks.data?.tracks ?? []}
-              total={tracks.data?.total ?? 0}
+          <section className="scene-registry-band" aria-label="How each object behaves in this scene">
+            <SceneObjectAtlas
               sessionId={selectedId}
-              title="Tracked objects in this scene"
-              sub="Named identities · measured speed, path and worst fused level"
+              scene={sceneData}
+              tracks={tracks.data?.tracks ?? []}
+              totalTracks={tracks.data?.total ?? 0}
               events={events.data?.rows ?? null}
-              thresholds={{
-                suspicious: config.data?.anomaly.threshold_suspicious ?? null,
-                irregular: config.data?.anomaly.threshold_irregular ?? null,
-              }}
             />
           </section>
 

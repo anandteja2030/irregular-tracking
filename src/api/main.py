@@ -40,6 +40,7 @@ from src.api.routes import evaluation as evaluation_routes
 from src.api.routes import jobs as job_routes
 from src.api.routes import live as live_routes
 from src.api.routes import media as media_routes
+from src.api.routes import labels as label_routes
 from src.api.routes import scene as scene_routes
 from src.api.routes import sessions as session_routes
 from src.api.routes import sources as source_routes
@@ -122,7 +123,8 @@ def create_app() -> FastAPI:
         app.include_router(router, prefix="", include_in_schema=False)
     analytics_routers = (session_routes.router, track_routes.router,
                          anomaly_routes.router, media_routes.router,
-                         scene_routes.router, evaluation_routes.router)
+                         scene_routes.router, evaluation_routes.router,
+                         label_routes.router)
     for router in analytics_routers:
         app.include_router(router, prefix="/api/v1")
         app.include_router(router, prefix="", include_in_schema=False)

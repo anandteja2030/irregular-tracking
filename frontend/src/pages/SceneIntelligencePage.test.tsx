@@ -506,7 +506,7 @@ describe("scene intelligence page", () => {
     expect(screen.getAllByText("No direction observations").length).toBeGreaterThan(0);
     expect(await screen.findByText("No elevated events")).toBeTruthy();
     expect(screen.getByText("Zone evidence not retained")).toBeTruthy();
-    expect(screen.getByText("No track deviations")).toBeTruthy();
+    expect(screen.getByText("No scene deviations measured")).toBeTruthy();
   });
 
   it("presents readiness coverage and every met gate for a ready calibration", async () => {

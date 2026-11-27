@@ -111,8 +111,12 @@ export function SettingsPage() {
       activity.reload();
       setFeedback({
         tone: "ok",
-        title: "All tracked data cleared",
-        body: `Removed ${formatNumber(result.purged.sessions)} sessions, ${formatNumber(result.purged.events)} observation rows and ${formatNumber(result.purged.uploads)} uploaded files. The dashboard now starts from an empty store.`,
+        title: "Factory reset complete",
+        body: `Removed ${formatNumber(result.purged.sessions)} sessions, ${formatNumber(
+          result.purged.events,
+        )} observation rows, ${formatNumber(result.purged.uploads)} uploaded files and reset ${formatNumber(
+          result.purged.config_reset ?? 0,
+        )} configuration values. Every workspace now starts from a fresh, empty store.`,
       });
     } catch (error) {
       setPurgeError(describeError(error));
@@ -1038,10 +1042,12 @@ export function SettingsPage() {
         >
           <div className="vault">
             <p className="quantum-panel-intro">
-              This removes the analysis database rows, retained preview frames and trajectories,
-              uploaded videos and finished job history, and cancels any running analysis or live
-              capture. Configuration, bundled sample files and the engine itself are not touched.
-              Once cleared there is no undo — export the sessions you need first.
+              This is a factory reset: it deletes every row in the analysis database, all retained
+              preview frames and trajectories, every uploaded video, all saved labels, the finished
+              job history and any running analysis or live capture, then restores the engine
+              configuration to its shipped defaults. The console reopens on an empty store, exactly
+              as on a first start. Bundled sample clips and the engine code are not touched. There
+              is no undo — export the sessions you need first.
             </p>
             <div className="vault__status">
               <div className="vault__count">
@@ -1054,7 +1060,7 @@ export function SettingsPage() {
               </div>
               <div className="vault__count">
                 <span>Purge scope</span>
-                <b style={{ fontSize: 13 }}>database · media · jobs</b>
+                <b style={{ fontSize: 13 }}>database · media · jobs · config</b>
               </div>
               <div className="vault__count">
                 <span>Last purge</span>
@@ -1065,12 +1071,15 @@ export function SettingsPage() {
             {purged && (
               <div className="vault__confirm" role="status">
                 <p>
-                  Purge complete. Removed {formatNumber(purged.sessions)} sessions ·{" "}
+                  Factory reset complete. Removed {formatNumber(purged.sessions)} sessions ·{" "}
                   {formatNumber(purged.events)} observations · {formatNumber(purged.tracks)} track
                   summaries · {formatNumber(purged.points)} trajectory points ·{" "}
                   {formatNumber(purged.calibration)} calibration snapshots ·{" "}
-                  {formatNumber(purged.artifacts)} retained artifact sets ·{" "}
-                  {formatNumber(purged.uploads)} uploads.
+                  {formatNumber(purged.labels)} labels · {formatNumber(purged.artifacts)} retained
+                  artifact sets · {formatNumber(purged.uploads)} uploads.{" "}
+                  {formatNumber(purged.tables_cleared ?? 0)} database tables cleared ·{" "}
+                  {formatNumber(purged.config_reset ?? 0)} configuration values restored to
+                  defaults.
                 </p>
               </div>
             )}
@@ -1124,7 +1133,8 @@ export function SettingsPage() {
             {purgeArmed && (
               <div className="vault__confirm">
                 <p>
-                  Erase every persisted session and all retained media? This cannot be undone.
+                  Erase every persisted session, all retained media, all labels and every tuned
+                  setting, returning the application to a first-start state? This cannot be undone.
                 </p>
               </div>
             )}

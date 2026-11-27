@@ -51,6 +51,15 @@ def save_labels(db_path: Path | str, session: str,
         return n
 
 
+def clear_labels(db_path: Path | str, session: str) -> int:
+    """Delete every label stored for one session; returns rows removed."""
+    with closing(_connect(db_path)) as conn, closing(conn.cursor()) as cur:
+        cur.execute("DELETE FROM ground_truth WHERE session = ?", (session,))
+        removed = cur.rowcount
+        conn.commit()
+    return max(0, int(removed))
+
+
 def load_labels(db_path: Path | str, session: str) -> list[dict]:
     with closing(_connect(db_path)) as conn, closing(conn.cursor()) as cur:
         rows = cur.execute(

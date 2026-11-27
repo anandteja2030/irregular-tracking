@@ -20,7 +20,9 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -36,6 +38,7 @@ from src.core.analysis_service import (
     save_session_to_db,
 )
 from src.pipeline import TrackingPipeline
+from src.video.object_detector import get_object_detector
 
 MAX_LIVE_SESSIONS = 4
 MAX_LIVE_FRAMES = 18_000          # ~25 min at the default 12 fps
@@ -44,6 +47,10 @@ MAX_FRAME_BYTES = 4 * 1024 * 1024
 DEFAULT_FPS = 12.0
 MIN_FPS, MAX_FPS = 1.0, 60.0
 FPS_SMOOTHING = 0.8
+# Weight of the newest measured frame in the per-object stability average.
+STABILITY_WEIGHT = 0.35
+STABILITY_WINDOW = 10
+Engine = Literal["objects", "motion", "auto"]
 
 LIVE = "live"
 STOPPING = "stopping"
@@ -104,19 +111,32 @@ def decode_frame(data: bytes) -> np.ndarray:
     return bgr
 
 
-def _track_payload(entry: dict) -> dict:
+def _track_payload(entry: dict, stability: dict | None = None) -> dict:
     cx, cy = entry["centroid"]
     width, height = entry["bbox_wh"]
+    fused = float(entry["fused_score"])
+    smoothed = fused if stability is None else float(stability["ema"])
+    level_share = (None if stability is None
+                   else float(stability["share"]))
     return {
+        # Measured fused score for this frame, and the recent average the
+        # console shows beside it. The level is always the engine's measured
+        # level; the average never rewrites a verdict.
+        "fused_smoothed": round(smoothed, 3),
+        "level_stability": (None if level_share is None
+                            else round(level_share, 3)),
         "track_id": int(entry["track_id"]),
         "box": [round(cx - width / 2, 1), round(cy - height / 2, 1),
                 round(width, 1), round(height, 1)],
         "centroid": [round(cx, 1), round(cy, 1)],
         "color": entry.get("color"),
         "shape": entry.get("shape"),
+        # The class the object detector reported ("person", "car", ...), and
+        # null for the colour/shape engine.
+        "class_name": entry.get("class_name"),
         "level": entry["level"],
         "scores": {
-            "fused": round(float(entry["fused_score"]), 3),
+            "fused": round(fused, 3),
             "rule": round(float(entry["rule_score"]), 3),
             "ml": round(float(entry["ml_score"]), 3),
             "scene": round(float(entry["scene_score"]), 3),
@@ -144,9 +164,20 @@ def _track_payload(entry: dict) -> dict:
 class LiveSession:
     """One in-progress webcam capture with its own pipeline and buffers."""
 
-    def __init__(self, live_id: str, session_id: str):
+    def __init__(self, live_id: str, session_id: str, engine: Engine = "auto"):
         self.live_id = live_id
         self.session_id = session_id
+        # Engine choice: `objects` runs the pretrained COCO detector (proper
+        # class names, far fewer saturated-background false positives), while
+        # `motion` keeps the colour + background-subtraction path for machines
+        # without the model or when maximum frame rate matters.
+        requested = engine if engine in ("objects", "motion", "auto") else "auto"
+        detector_ready = False
+        if requested in ("objects", "auto"):
+            detector_ready = bool(get_object_detector().available)
+        self.engine = "objects" if detector_ready else "motion"
+        self.engine_requested = requested
+        self.stability: dict[int, dict] = {}
         self.created_ts = _now_iso()
         self.started_ts: str | None = None
         self.ended_ts: str | None = None
@@ -158,7 +189,10 @@ class LiveSession:
         # add moving-foreground detection on top of the colour path. The rest
         # of the pipeline (tracker, calibration, fusion, explanations) is the
         # same engine a file run uses.
-        self.pipeline = TrackingPipeline(session=session_id, motion_augment=True)
+        self.pipeline = TrackingPipeline(
+            session=session_id,
+            motion_augment=not detector_ready,
+            use_object_detector=detector_ready)
         self.rows: list[dict] = []
         self.previews: list[PreviewFrame] = []
         self.frame_idx = 0
@@ -193,12 +227,15 @@ class LiveSession:
 
             height, width = bgr.shape[:2]
             self.width, self.height = width, height
+            started = time.perf_counter()
             result = self.pipeline.process_frame(bgr, self.frame_idx, self.fps)
+            process_ms = round((time.perf_counter() - started) * 1000.0, 1)
 
             for entry in result.entries:
                 self.rows.append(observation_row(entry, self.fps))
                 level = entry["level"]
                 self.levels[level] = self.levels.get(level, 0) + 1
+                self._update_stability(entry)
             if (self.frame_idx % PREVIEW_STRIDE == 0
                     and len(self.previews) < MAX_PREVIEW_FRAMES):
                 self.previews.append(PreviewFrame(
@@ -210,7 +247,8 @@ class LiveSession:
             # Only objects actually measured in this frame are drawn and
             # listed; a coasting prediction from the Kalman filter is not a
             # visible object and would read as a phantom box on the stage.
-            tracks = [_track_payload(entry) for entry in result.entries
+            tracks = [_track_payload(entry, self.stability.get(entry["track_id"]))
+                      for entry in result.entries
                       if entry.get("misses", 0) == 0]
             confirmed = sum(1 for track in tracks if track["confirmed"])
             payload = {
@@ -222,6 +260,10 @@ class LiveSession:
                 "width": width,
                 "height": height,
                 "calibrated": bool(result.calibrated),
+                "calibration": self._calibration_payload(),
+                "engine": self.engine,
+                "engine_requested": self.engine_requested,
+                "process_ms": process_ms,
                 "detections": int(result.n_detections),
                 "tracks": tracks,
                 "counts": {
@@ -238,6 +280,41 @@ class LiveSession:
             self.frame_idx += 1
             self.last_seen = time.monotonic()
             return payload
+
+    # ---------------------------------------------------------- stability
+    def _update_stability(self, entry: dict) -> None:
+        """Track a recent running average and level share per identity.
+
+        Webcam scores jitter frame to frame; the average makes the reading
+        steadier to look at and `level_stability` says how consistently the
+        measured level held. Neither value changes the recorded observation.
+        """
+        track_id = int(entry["track_id"])
+        level = entry["level"]
+        fused = float(entry["fused_score"])
+        state = self.stability.get(track_id)
+        if state is None:
+            state = {"ema": fused, "levels": deque(maxlen=STABILITY_WINDOW)}
+            self.stability[track_id] = state
+        else:
+            state["ema"] = (STABILITY_WEIGHT * fused
+                            + (1.0 - STABILITY_WEIGHT) * state["ema"])
+        state["levels"].append(level)
+        counts = list(state["levels"])
+        state["share"] = counts.count(level) / len(counts)
+
+    def _calibration_payload(self) -> dict:
+        stats = self.pipeline.calibrator.stats()
+        cfg = self.pipeline.cfg.calibration
+        progress = min(1.0, stats.n_samples / max(cfg.min_samples, 1))
+        return {
+            "ready": bool(stats.ready),
+            "samples": stats.n_samples,
+            "needed": int(cfg.min_samples),
+            "tracks": stats.n_tracks,
+            "progress": round(progress, 3),
+            "median_speed": round(stats.speed_p50, 2),
+        }
 
     # -------------------------------------------------------------- stop
     def stop(self) -> dict:
@@ -314,6 +391,8 @@ class LiveSession:
                 "tracks_seen": len(self.pipeline.tracker.all_time_tracks()),
                 "levels": dict(self.levels),
                 "elapsed_s": round(time.monotonic() - self.created_mono, 2),
+                "engine": self.engine,
+                "calibration": self._calibration_payload(),
                 "limits": {"max_frames": MAX_LIVE_FRAMES,
                            "max_frame_bytes": MAX_FRAME_BYTES},
             }
@@ -330,14 +409,15 @@ class LiveSessionManager:
         self._sessions: dict[str, LiveSession] = {}
 
     # ------------------------------------------------------------ lifecycle
-    def create(self) -> dict:
+    def create(self, engine: Engine = "auto") -> dict:
         with self._lock:
             self._prune_locked()
             if len(self._sessions) >= self.max_sessions:
                 raise LiveLimitError(
                     f"At most {self.max_sessions} live captures can run at once. "
                     "Stop one in another tab, or wait for an idle capture to expire.")
-            session = LiveSession("live_" + secrets.token_hex(8), _session_id())
+            session = LiveSession("live_" + secrets.token_hex(8), _session_id(),
+                                  engine=engine)
             self._sessions[session.live_id] = session
             return session.snapshot()
 

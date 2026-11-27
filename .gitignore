@@ -30,3 +30,5 @@ artifacts/
 .DS_Store
 .idea/
 .vscode/
+# Local build/serve logs and scratch scripts
+.build/

@@ -46,17 +46,13 @@ function share(count: number, total: number): string | null {
   return `${((count / total) * 100).toFixed(1)}%`;
 }
 
-/** Plain-language meaning of the level, before this object's own numbers. */
-const LEVEL_MEANING: Record<Level, string> = {
-  Normal:
-    "Regular means every observation stayed below the suspicious threshold, so the object never left the learned baseline.",
-  Suspicious:
-    "Suspicious means at least one observation entered the middle band but none reached the irregular threshold.",
-  Irregular:
-    "Irregular means at least one observation reached the irregular threshold, the highest band the engine reports.",
-};
-
-/** One measured sentence stating why this object holds its level. */
+/** One measured sentence stating why this object holds its level.
+ *
+ * The object verdict is a sustained-evidence rule, not a per-frame maximum: an
+ * object is only branded Suspicious or Irregular when enough of its own rows
+ * entered that band. A single loud frame can therefore sit inside a Regular
+ * object, and this sentence says so instead of claiming every frame was calm.
+ */
 export function verdictLine(
   level: Level,
   levels: LevelCounts,
@@ -72,34 +68,29 @@ export function verdictLine(
   const irregular = levels.Irregular ?? 0;
   const suspiciousMark = fixed(thresholds?.suspicious);
   const irregularMark = fixed(thresholds?.irregular);
+  const mix = `${formatNumber(irregular)} irregular and ${formatNumber(
+    suspicious,
+  )} suspicious observation${suspicious + irregular === 1 ? "" : "s"} out of ${formatNumber(
+    observations,
+  )} (${share(irregular + suspicious, observations) ?? "0.0%"})`;
 
   if (level === "Irregular") {
-    const count = `${formatNumber(irregular)} of ${formatNumber(observations)} observations (${share(
-      irregular,
-      observations,
-    )})`;
-    return `${LEVEL_MEANING.Irregular} Here ${count} sat in that band${
-      peak === null ? "" : ` and the peak fused score was ${peak}`
-    }${irregularMark === null ? "" : ` against a mark of ${irregularMark}`}.`;
+    return `Irregular is the highest band the engine reports, and it needs repeated irregular frames rather than one. Here ${mix}${
+      peak === null ? "" : `, with a peak fused score of ${peak}`
+    }${irregularMark === null ? "" : ` against an irregular mark of ${irregularMark}`}.`;
   }
   if (level === "Suspicious") {
-    const count = `${formatNumber(suspicious)} of ${formatNumber(observations)} observations (${share(
-      suspicious,
-      observations,
-    )})`;
-    return `${LEVEL_MEANING.Suspicious} Here ${count} sat in that band${
-      peak === null ? "" : ` and the peak fused score was ${peak}`
-    }${suspiciousMark === null ? "" : ` against a mark of ${suspiciousMark}`}; none reached irregular.`;
+    return `Suspicious is the middle band: elevated frames repeat, but not often enough to reach the irregular band. Here ${mix}${
+      peak === null ? "" : `, with a peak fused score of ${peak}`
+    }${suspiciousMark === null ? "" : ` against a suspicious mark of ${suspiciousMark}`}.`;
   }
-  return `${LEVEL_MEANING.Normal} All ${formatNumber(observations)} observations here stayed under the mark${
-    suspiciousMark === null ? "" : ` of ${suspiciousMark}`
-  }${
+  return `Regular means no sustained deviation was measured. Here ${mix}${
     peak === null
       ? ""
-      : `, the highest fused score being ${peak}${
-          suspiciousMark === null ? "" : ` — ${(Number(suspiciousMark) - Number(peak)).toFixed(2)} below it`
-        }`
-  }.`;
+      : ` — individual frames did reach a fused score of ${peak}${
+          suspiciousMark === null ? "" : ` (mark ${suspiciousMark})`
+        }, but too few rows repeated that to count as a pattern`
+  }, so the object is reported as Regular instead of being branded by a one-off frame.`;
 }
 
 function MixRow({

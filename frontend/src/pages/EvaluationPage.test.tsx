@@ -78,6 +78,22 @@ const LABELED_EVALUATION: EvaluationResponse = {
     fpr: 0.2,
     accuracy: 0.75,
     n_labeled: 8,
+    roc_auc: 0.8,
+  },
+  roc: {
+    available: true,
+    auc: 0.8,
+    points: [
+      { fpr: 0, tpr: 0 },
+      { fpr: 0, tpr: 0.667 },
+      { fpr: 0.2, tpr: 0.667 },
+      { fpr: 0.2, tpr: 1 },
+      { fpr: 1, tpr: 1 },
+    ],
+    positives: 3,
+    negatives: 5,
+    excluded: 0,
+    reason: null,
   },
   reason: null,
   labeled_observations: 8,
@@ -305,7 +321,7 @@ afterEach(() => {
 });
 
 describe("evaluation and reports", () => {
-  it("shows measured metrics, a confusion matrix and the unsupported ROC-AUC disclosure", async () => {
+  it("shows measured metrics, a confusion matrix and the measured ROC curve", async () => {
     mockFetch();
     renderPage();
 
@@ -328,8 +344,11 @@ describe("evaluation and reports", () => {
     expect(table.querySelector(".confusion__cell--fn")?.textContent).toContain("1");
     expect(table.querySelector(".confusion__cell--tn")?.textContent).toContain("4");
 
-    expect(screen.getByText("ROC-AUC not available")).toBeTruthy();
-    expect(screen.getByText(/not reported as zero or guessed/)).toBeTruthy();
+    expect(screen.getByText("Ranked separation · ROC")).toBeTruthy();
+    expect(screen.getByText("Strong separation")).toBeTruthy();
+    expect(screen.getByRole("img", { name: /ROC curve of the fused score, AUC 0.800/ })).toBeTruthy();
+    expect(screen.getAllByText("AUC 0.800").length).toBeGreaterThan(0);
+    expect(screen.queryByText("ROC-AUC not available")).toBeNull();
     expect(screen.getByText(/8 labels matched to observations/)).toBeTruthy();
 
     expect(
@@ -473,7 +492,7 @@ describe("evaluation and reports", () => {
     expect(hero.querySelector(".eval-hero__coverage-bar > span")).toBeTruthy();
 
     const cards = document.querySelectorAll(".eval-layout .metric-card");
-    expect(cards).toHaveLength(5);
+    expect(cards).toHaveLength(6);
     cards.forEach((card) => expect(card.querySelector(".metric-card__meter")).toBeTruthy());
 
     const matrixCells = document.querySelectorAll(".confusion__name");

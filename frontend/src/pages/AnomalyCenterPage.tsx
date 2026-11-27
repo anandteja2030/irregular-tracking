@@ -112,13 +112,19 @@ export function AnomalyCenterPage() {
     setLinkedEventId(null);
   }, [linkedEventId, events.data]);
 
+  // Bring the selected event's investigation into view whenever it is not
+  // already visible. Selecting a ledger row at the top of a 1,300 px workbench
+  // otherwise left the detail panel far below the fold with no feedback.
   useEffect(() => {
     if (selectedEventId === null) return;
-    if (typeof window === "undefined" || window.innerWidth > 1000) return;
+    if (typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
-      document
-        .getElementById("anomaly-investigation")
-        ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      const panel = document.getElementById("anomaly-investigation");
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      const obscured = rect.top < 80 || rect.top > window.innerHeight * 0.55 || rect.height > window.innerHeight;
+      if (!obscured) return;
+      panel.scrollIntoView?.({ behavior: "smooth", block: "start" });
     });
   }, [selectedEventId]);
 
@@ -316,7 +322,11 @@ export function AnomalyCenterPage() {
             <Panel
               bodyClassName="panel__body--flush"
               title="Frame evidence"
-              sub="Retained previews for the selected event"
+              sub={
+                media.data?.preview_stride
+                  ? `Retained previews · each one stands for ${media.data.preview_stride} source frames`
+                  : "Retained previews for the selected event"
+              }
               actions={
                 media.data ? (
                   <span className="tag">{formatNumber(media.data.preview_count)} previews</span>
@@ -324,10 +334,9 @@ export function AnomalyCenterPage() {
               }
               foot={
                 <>
-                  <span className="dot dot--warn" />
-                  {media.data
-                    ? media.data.annotated_video.reason
-                    : "No annotated video is produced by the engine; only retained preview frames exist."}
+                  <span className="dot dot--live" />
+                  Annotations are drawn onto every retained preview. Build a downloadable
+                  annotated recap from those frames in the panel.
                 </>
               }
             >

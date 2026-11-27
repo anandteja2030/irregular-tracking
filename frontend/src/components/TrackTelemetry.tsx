@@ -1,6 +1,6 @@
 import type { TrackDetail } from "../lib/types";
 import type { DirectionSummary } from "../lib/tracks";
-import { formatTrackId } from "../lib/tracks";
+import { formatTrackId, trackReading } from "../lib/tracks";
 import { formatDuration, formatNumber } from "../lib/format";
 import { LevelBadge, LevelMeter, Score } from "./SessionBits";
 import { MetricCard, MetricGrid } from "./MetricCard";
@@ -20,8 +20,21 @@ export function TrackTelemetry({ detail, directions, fps }: TrackTelemetryProps)
     { level: "Irregular" as const, count: observed.levels.Irregular },
   ];
 
+  const reading = trackReading(detail);
+
   return (
     <div className="stack gap-14">
+      <div className="object-read">
+        <p className="explain explain--tight">
+          <span className="note__label">What this object is</span>
+          {reading.identity}
+        </p>
+        <p className="explain explain--tight">
+          <span className="note__label">What it did</span>
+          {reading.behaviour}
+        </p>
+      </div>
+
       <MetricGrid columns={3} label="Observation levels" className="telemetry-levels">
         {levels.map((entry) => (
           <MetricCard

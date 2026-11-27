@@ -872,10 +872,9 @@ export function TrackExplorerPage() {
                     }
                     foot={
                       <>
-                        <span className="dot dot--warn" />
-                        {media.data
-                          ? media.data.annotated_video.reason
-                          : "No annotated video is produced by the engine; only retained preview frames exist."}
+                        <span className="dot dot--live" />
+                        Annotations are drawn onto every retained preview. Build a downloadable
+                        annotated recap from those frames in the panel.
                       </>
                     }
                   >

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hard-to-detect test clips</title>
+<style>
+  body { margin: 0; padding: 24px; background: #12161b; color: #e7edf3;
+         font: 15px/1.5 system-ui, sans-serif; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  p.lead { margin: 0 0 20px; color: #9fb0c0; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  article { background: #1a2027; border: 1px solid #2a3440; border-radius: 10px; padding: 12px; }
+  h2 { margin: 0 0 4px; font-size: 15px; }
+  article p { margin: 0 0 10px; color: #9fb0c0; font-size: 13px; }
+  video { width: 100%; border-radius: 6px; background: #000; display: block; }
+  a.dl { display: inline-block; margin-top: 10px; padding: 7px 12px; border-radius: 6px;
+         background: #2f81f7; color: #fff; text-decoration: none; font-weight: 600; }
+</style></head><body>
+<h1>Hard-to-detect test clips</h1>
+<p class="lead">Five synthetic clips for the Neural Command pipeline, one weak point each.</p>
+<div class="grid">
+  <article><h2>hard_low_light.mp4</h2><p>Dim, grainy objects with a 2-frame black-out every 11 frames.</p>
+    <video controls preload="metadata" src="/hard_low_light.mp4"></video>
+    <a class="dl" download href="/hard_low_light.mp4">Download MP4</a></article>
+  <article><h2>hard_crowded_crossing.mp4</h2><p>Two same-colour circles pass head-on through each other.</p>
+    <video controls preload="metadata" src="/hard_crowded_crossing.mp4"></video>
+    <a class="dl" download href="/hard_crowded_crossing.mp4">Download MP4</a></article>
+  <article><h2>hard_subtle_speed.mp4</h2><p>1.8x speed burst for 1.4 s, no heading change.</p>
+    <video controls preload="metadata" src="/hard_subtle_speed.mp4"></video>
+    <a class="dl" download href="/hard_subtle_speed.mp4">Download MP4</a></article>
+  <article><h2>hard_short_pause.mp4</h2><p>2.4 s stop, just under the 3.0 s loiter rule.</p>
+    <video controls preload="metadata" src="/hard_short_pause.mp4"></video>
+    <a class="dl" download href="/hard_short_pause.mp4">Download MP4</a></article>
+  <article><h2>hard_grey_intruder.mp4</h2><p>Grey and dim intruders under the colour-mask floors.</p>
+    <video controls preload="metadata" src="/hard_grey_intruder.mp4"></video>
+    <a class="dl" download href="/hard_grey_intruder.mp4">Download MP4</a></article>
+</div></body></html>

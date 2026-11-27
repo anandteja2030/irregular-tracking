@@ -241,9 +241,22 @@ def build_report(payload: dict) -> str:
             ("Accuracy", _fmt(metrics["accuracy"], 3)),
             ("Confusion (TP/FP/FN/TN)",
              f"{metrics['tp']}/{metrics['fp']}/{metrics['fn']}/{metrics['tn']}"),
+            ("ROC-AUC (fused score, ranked)",
+             _fmt((evaluation.get("roc") or {}).get("auc"), 3)),
         ]))
         add(f"_Predicted positives: {evaluation['predicted_positive']} "
             f"({evaluation['positive_rule']})._")
+        roc = evaluation.get("roc") or {}
+        if roc.get("available"):
+            add(f"_ROC is computed by ranking the persisted fused score of the "
+                f"same {evaluation['labeled_observations']} labelled observations "
+                f"({roc['positives']} anomalies / {roc['negatives']} normals, "
+                f"{roc['excluded']} without a stored score). A value of 0.5 is "
+                f"chance, so the measured AUC of {roc['auc']:.3f} describes how "
+                f"well this score ranks anomalies above normals - it is not the "
+                f"thresholded accuracy above._")
+        else:
+            add(f"_ROC-AUC not computed: {roc.get('reason', 'both classes are required')}_")
         add("")
 
     add("## 7. Media & data retention")
@@ -263,7 +276,9 @@ def build_report(payload: dict) -> str:
             add("- Each retained frame is an annotated preview (boxes, IDs and "
                 "level labels) available at "
                 f"`/api/v1/sessions/{detail['session']}/frames/<frame>`.")
-    add(f"- Annotated video: **unavailable** — {media['annotated_video']['reason']}")
+    add(f"- Annotated video file: **not written by the pipeline** — "
+        f"{media['annotated_video']['reason']}")
+
     for note in media["notes"]:
         add(f"- {note}")
     add("")

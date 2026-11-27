@@ -9,7 +9,9 @@ import { Panel } from "../components/Panel";
 import { MetricCard, MetricGrid } from "../components/MetricCard";
 import { SectionHeader } from "../components/SectionHeader";
 import { ReportGuide } from "../components/ReportGuide";
+import { GroundTruthLabeller } from "../components/GroundTruthLabeller";
 import { ResultsDashboard } from "../components/ResultsDashboard";
+import { RocCurve } from "../components/RocCurve";
 import { StatusPill, type StatusTone } from "../components/StatusPill";
 import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { BarList } from "../components/charts";
@@ -27,7 +29,9 @@ import {
   formatMetric,
   formatRate,
   labelTotal,
+  rocAnalysis,
   rocAuc,
+  rocVerdict,
 } from "../lib/evaluation";
 import { formatBytes, formatNumber } from "../lib/format";
 
@@ -177,7 +181,7 @@ function ClassBalance({
 }
 
 export function EvaluationPage() {
-  const { sessions, selected, selectedId, select } = useSession();
+  const { sessions, selected, selectedId, select, reload: reloadSessions } = useSession();
   const evaluation = useResource(
     (signal) => api.evaluation(selectedId as string, signal),
     { enabled: Boolean(selectedId), key: selectedId ?? "none" },
@@ -186,7 +190,9 @@ export function EvaluationPage() {
   const state = evaluationState(data);
   const metrics = data?.metrics ?? null;
   const matrix = confusionMatrix(metrics);
-  const auc = rocAuc(metrics);
+  const roc = rocAnalysis(data);
+  const auc = roc?.auc ?? rocAuc(metrics);
+  const aucVerdict = roc ? rocVerdict(roc.auc as number) : null;
   const [downloads, setDownloads] = useState<DownloadMap>(INITIAL_DOWNLOADS);
   const controllers = useRef<Partial<Record<SessionDownloadKind, AbortController>>>({});
 
@@ -466,18 +472,21 @@ export function EvaluationPage() {
                 label="ROC-AUC"
                 value={formatMetric(auc)}
                 meter={auc}
-                tone="accent"
-                hint="ranked separation returned by the API"
+                tone={`${aucVerdict?.tone ?? "accent"}` === "bad" ? "warn" : "accent"}
+                hint={
+                  roc
+                    ? `${aucVerdict?.label ?? "ranked separation"} · fused score`
+                    : "ranked separation returned by the API"
+                }
               />
             ) : (
               <div className="eval-unavailable" role="status">
                 <AlertIcon width={15} height={15} />
                 <div>
-                  <p className="eval-unavailable__title">ROC-AUC not available</p>
+                  <p className="eval-unavailable__title">ROC-AUC not computed</p>
                   <p className="eval-unavailable__body">
-                    The evaluation API returns threshold metrics only. It does not
-                    expose ranked probabilities, so an ROC-AUC cannot be computed
-                    here — it is not reported as zero or guessed.
+                    {data?.roc?.reason ??
+                      "Both a labelled anomaly and a labelled normal with a stored fused score are needed to rank the classes."}
                   </p>
                 </div>
               </div>
@@ -495,6 +504,56 @@ export function EvaluationPage() {
             </ul>
           </aside>
         </div>
+
+        <Panel
+          title="Ranked separation · ROC"
+          sub="Every labelled observation ranked by its persisted fused score"
+          actions={
+            roc ? <span className="tag mono">AUC {formatMetric(roc.auc)}</span> : undefined
+          }
+        >
+          {roc && aucVerdict ? (
+            <div className="roc-panel">
+              <RocCurve roc={roc} />
+              <div className="roc-panel__read">
+                <span className={`roc-panel__verdict roc-panel__verdict--${aucVerdict.tone}`}>
+                  {aucVerdict.label}
+                </span>
+                <p className="roc-panel__detail">{aucVerdict.detail}</p>
+                <div className="rows rows--tight">
+                  <div className="row">
+                    <span className="row__key">Labelled anomalies</span>
+                    <span className="row__value mono">{formatNumber(roc.positives)}</span>
+                  </div>
+                  <div className="row">
+                    <span className="row__key">Labelled normals</span>
+                    <span className="row__value mono">{formatNumber(roc.negatives)}</span>
+                  </div>
+                  <div className="row">
+                    <span className="row__key">Excluded (no fused score)</span>
+                    <span className="row__value mono">{formatNumber(roc.excluded)}</span>
+                  </div>
+                </div>
+                <p className="hint hint--flush">
+                  The curve sweeps every possible cut-off on the same fused score, so it is
+                  independent of the configured Suspicious threshold used by the confusion matrix.
+                  A larger area means anomalies are ranked above normal observations more often.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="eval-unavailable" role="status">
+              <AlertIcon width={15} height={15} />
+              <div>
+                <p className="eval-unavailable__title">No ranked curve for this run</p>
+                <p className="eval-unavailable__body">
+                  {data?.roc?.reason ??
+                    "ROC needs both classes present with stored fused scores. Nothing is guessed or filled in."}
+                </p>
+              </div>
+            </div>
+          )}
+        </Panel>
       </div>
     );
   } else if (state === "insufficient") {
@@ -586,9 +645,9 @@ export function EvaluationPage() {
         <p className="note-line note-line--wrap">
           <span className="dot dot--warn" />
           <span>
-            Label curation is not wired into this console yet, so this surface is
-            read-only. An unlabeled session is reported as unlabeled — never as a
-            zero score.
+            Use <b>Curate the ground truth</b> above to mark tracked objects Normal or
+            Anomaly. An unlabeled session is reported as unlabeled — never as a zero
+            score.
           </span>
         </p>
       </div>
@@ -727,6 +786,40 @@ export function EvaluationPage() {
             tone: state === "ready" ? "normal" : "bad",
           },
         ]}
+      />
+
+      <section className="section" aria-labelledby="eval-labeller-title">
+        <SectionHeader
+          id="eval-labeller-title"
+          title="Curate the ground truth"
+          meta="The only source of the labels these metrics are measured against"
+          level={3}
+        />
+        {selectedId ? (
+          <GroundTruthLabeller
+            sessionId={selectedId}
+            onChanged={() => {
+              evaluation.reload();
+              reloadSessions();
+            }}
+          />
+        ) : (
+          <Panel>
+            <EmptyState
+              compact
+              title="No session selected"
+              body="Pick a persisted run to label its objects."
+              glyph={<EvaluationIcon width={17} height={17} />}
+            />
+          </Panel>
+        )}
+      </section>
+
+      <SectionHeader
+        title="Measured results"
+        id="eval-results-title"
+        meta="labels · predictions · ranked scores"
+        description="Everything below is computed by the API from the selected run. A missing measurement is written as unavailable, never as zero."
       />
 
       <div

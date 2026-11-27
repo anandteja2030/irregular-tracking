@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from config.config import load_config
 from src.analysis.ground_truth import load_labels
-from src.analysis.metrics import evaluate, predicted_positive
+from src.analysis.metrics import evaluate, predicted_positive, roc_analysis
 from src.api import repository as repo
 from src.api.errors import api_error
 from src.api.session_store import SessionArtifacts, store
@@ -127,14 +127,18 @@ def media_payload(session: str) -> dict:
         "frames": frames,
         "annotated_video": {
             "available": False,
-            "reason": "No annotated video is produced or stored by the "
-                      "pipeline; annotations exist only in the live preview "
-                      "frames and the console.",
+            "reason": "The pipeline does not write an annotated video file; it "
+                      "draws every detection onto the retained preview frames. "
+                      "The console can compose those annotated previews into a "
+                      "downloadable recap video in your browser.",
         },
         "notes": [
             MEDIA_LIMITATION.format(stride=art.preview_stride if art else 6),
             "Frame access is scoped to the requested session; frame numbers "
             "outside the retained preview set return 404.",
+            "An annotated recap can be built from the retained annotated "
+            "previews in the console (WebM, downloaded locally); the server "
+            "does not encode or store video.",
         ],
     }
 
@@ -391,6 +395,21 @@ def evaluation_payload(session: str) -> dict:
         label_counts[value] = label_counts.get(value, 0) + 1
     outcome = evaluate(rows, labels)
     metrics = outcome.metrics.as_dict() if outcome.metrics is not None else None
+    # Ranked ROC uses the persisted fused score of exactly the observations
+    # the label set matched, so its AUC and the confusion matrix describe the
+    # same population.
+    label_map = {(int(r["frame_idx"]), int(r["track_id"])): r["label"]
+                 for r in labels}
+    roc_labels: list[str] = []
+    roc_scores: list[float | None] = []
+    for row in rows:
+        key = (int(row["frame"]), int(row["track_id"]))
+        if key in label_map:
+            roc_labels.append(label_map[key])
+            roc_scores.append(row.get("fused_score"))
+    roc = roc_analysis(roc_labels, roc_scores)
+    if metrics is not None:
+        metrics["roc_auc"] = roc["auc"]
     total = len(rows)
     labeled = outcome.n_labeled
     return {
@@ -398,6 +417,7 @@ def evaluation_payload(session: str) -> dict:
         "available": bool(labels),
         "computable": outcome.computable,
         "metrics": metrics,
+        "roc": roc,
         "reason": outcome.reason or None,
         "labeled_observations": labeled,
         "total_observations": total,

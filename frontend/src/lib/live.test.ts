@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_CAPTURE_MAX_WIDTH,
   appearanceColour,
+  calibrationPercent,
   cameraErrorMessage,
   captureSize,
+  engineLabel,
   headingArrow,
   levelCounts,
   levelShort,
   liveElapsed,
+  liveObjectName,
   overlayBox,
+  resolveProfile,
 } from "./live";
 import type { LiveTrack } from "./types";
 
@@ -146,5 +150,51 @@ describe("cameraErrorMessage", () => {
 
   it("falls back to the browser message", () => {
     expect(cameraErrorMessage(new Error("boom"))).toContain("boom");
+  });
+});
+
+describe("live capture adaptivity helpers", () => {
+  it("steps capture detail down as the measured round trip grows", () => {
+    expect(resolveProfile("auto", 120).key).toBe("high");
+    expect(resolveProfile("auto", 400).key).toBe("balanced");
+    expect(resolveProfile("auto", 900).key).toBe("fast");
+    expect(resolveProfile("auto", 400).profile.maxWidth).toBeLessThan(
+      resolveProfile("auto", 120).profile.maxWidth,
+    );
+  });
+
+  it("keeps an explicit capture quality regardless of latency", () => {
+    expect(resolveProfile("high", 1200).key).toBe("high");
+    expect(resolveProfile("fast", 50).key).toBe("fast");
+  });
+
+  it("clamps baseline progress to a whole percentage", () => {
+    expect(calibrationPercent({ progress: 0.456 })).toBe(46);
+    expect(calibrationPercent({ samples: 15, needed: 30 })).toBe(50);
+    expect(calibrationPercent({ progress: 2 })).toBe(100);
+    expect(calibrationPercent(null)).toBe(0);
+  });
+
+  it("names the engine that actually scored a frame", () => {
+    expect(engineLabel("objects")).toContain("object");
+    expect(engineLabel("motion")).toContain("motion");
+    expect(engineLabel(undefined)).toContain("unknown");
+  });
+
+  it("downscales the capture to the profile width, never up", () => {
+    expect(captureSize(1920, 1080, 640).width).toBe(640);
+    expect(captureSize(320, 240, 960).width).toBe(320);
+  });
+});
+
+describe("live object naming", () => {
+  it("prefers the detector's real class name over a colour description", () => {
+    expect(liveObjectName({ class_name: "person", color: "red", shape: "rectangle" })).toBe(
+      "person",
+    );
+    expect(liveObjectName({ class_name: null, color: "red", shape: "circle" })).toBe(
+      "red circle",
+    );
+    expect(liveObjectName({ color: null, shape: null })).toBe("unclassified");
   });
 });
