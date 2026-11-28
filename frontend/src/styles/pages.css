@@ -9380,3 +9380,23 @@ a.export-row:hover {
   text-transform: none;
   letter-spacing: 0.01em;
 }
+
+/* Live Vision (in-browser engine) page */
+.hint-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.hint-list li::marker {
+  color: var(--accent);
+}
+
+.hint-list strong {
+  color: var(--text-1);
+  font-weight: 600;
+}

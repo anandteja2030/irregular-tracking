@@ -21,6 +21,7 @@ import { AnomalyCenterPage } from "./pages/AnomalyCenterPage";
 import { SceneIntelligencePage } from "./pages/SceneIntelligencePage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { LocalVisionPage } from "./pages/LocalVisionPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 function ShellLayout() {
@@ -83,6 +84,7 @@ export function AppRoutes() {
         <Route path="/scene" element={<SceneIntelligencePage />} />
         <Route path="/evaluation" element={<EvaluationPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/live" element={<LocalVisionPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

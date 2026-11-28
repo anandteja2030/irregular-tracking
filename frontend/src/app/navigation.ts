@@ -3,6 +3,7 @@ import {
   AnomalyIcon,
   EvaluationIcon,
   OverviewIcon,
+  RadioIcon,
   SceneIcon,
   SettingsIcon,
   StudioIcon,
@@ -83,6 +84,15 @@ export const NAV_ITEMS: NavItem[] = [
     shortcut: ",",
     blurb: "Engine configuration, thresholds and stored paths.",
     Icon: SettingsIcon,
+  },
+  {
+    id: "live-vision",
+    path: "/live",
+    label: "Live Vision",
+    index: "08",
+    shortcut: "L",
+    blurb: "In-browser webcam analysis: motion, speed and scene-relative verdicts.",
+    Icon: RadioIcon,
   },
 ];
 

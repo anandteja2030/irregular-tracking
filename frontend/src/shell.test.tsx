@@ -47,7 +47,7 @@ describe("shell navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Primary" });
     const links = within(nav).getAllByRole("link");
 
-    expect(links).toHaveLength(7);
+    expect(links).toHaveLength(8);
     const expected = [
       ["Command Overview", "/"],
       ["Video Studio", "/video-studio"],
@@ -56,6 +56,7 @@ describe("shell navigation", () => {
       ["Scene Intelligence", "/scene"],
       ["Evaluation & Reports", "/evaluation"],
       ["System Settings", "/settings"],
+      ["Live Vision", "/live"],
     ] as const;
 
     expected.forEach(([name, href], index) => {
