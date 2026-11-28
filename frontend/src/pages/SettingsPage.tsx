@@ -250,7 +250,13 @@ export function SettingsPage() {
               }`}
             >
               <CpuIcon width={11} height={11} />
-              {phase === "online" ? "API online" : phase === "offline" ? "API offline" : "API linking"}
+              {phase === "online"
+                ? "API online"
+                : phase === "local"
+                  ? "Browser backend"
+                  : phase === "offline"
+                    ? "API offline"
+                    : "API linking"}
             </span>
             <button type="button" className="btn" onClick={refresh}>
               <span className="btn__icon">

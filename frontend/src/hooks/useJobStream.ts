@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, isLocalBackend } from "../lib/api";
 import { isTerminalState, jobSocketUrl } from "../lib/studio";
 import type { JobSnapshot } from "../lib/types";
 
@@ -140,7 +140,12 @@ export function useJobStream(jobId: string | null): JobStream {
         const payload = await api.job(jobId, controller.signal);
         if (disposed) return;
         apply(payload.job);
-        if (!isTerminalState(payload.job.state)) connect();
+        // The in-browser job has no socket to connect to; polling its record is
+        // the transport that exists there.
+        if (!isTerminalState(payload.job.state)) {
+          if (isLocalBackend()) startPolling();
+          else connect();
+        }
       } catch (cause) {
         if (disposed) return;
         if (cause instanceof ApiError && cause.status === 404) {

@@ -192,12 +192,18 @@ export function OverviewPage() {
                 v{health.data?.version ?? system.data?.version ?? "—"}
               </StatusPill>
               <StatusPill
-                tone={online ? "ok" : phase === "offline" ? "bad" : "muted"}
+                tone={online || phase === "local" ? "ok" : phase === "offline" ? "bad" : "muted"}
                 size="sm"
                 dot
                 live
               >
-                {online ? "Operational" : phase === "offline" ? "Offline" : "Linking"}
+                {online
+                  ? "Operational"
+                  : phase === "local"
+                    ? "Browser engine"
+                    : phase === "offline"
+                      ? "Offline"
+                      : "Linking"}
               </StatusPill>
             </div>
             {heroLede ? <p className="hero__lede">{heroLede}</p> : null}

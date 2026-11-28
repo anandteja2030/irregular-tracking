@@ -239,6 +239,13 @@ export async function downloadSessionExport(
   kind: SessionDownloadKind,
   signal?: AbortSignal,
 ): Promise<SessionDownload> {
+  // The export is built in the tab when there is no server: same file names,
+  // same datasets, produced from the stored session.
+  if ((await backendMode()) === "local") {
+    const local = localModule ?? (await localReady);
+    const built = (await local.downloadExport(sessionId, kind)) as SessionDownload;
+    return built;
+  }
   const base = sessionPath(sessionId);
   const path =
     kind === "report"
@@ -358,7 +365,7 @@ export function uploadVideo(
   });
 }
 
-export const api = {
+const remoteApi = {
   health: (signal?: AbortSignal) =>
     request<Health>("/health", { signal, timeoutMs: 6_000 }),
   system: (signal?: AbortSignal) => request<SystemStatus>("/system", { signal }),
@@ -567,6 +574,96 @@ export const api = {
       { method: "POST", signal },
     ),
 };
+
+/** Which backend answers this deployment.
+ *
+ * GitHub Pages serves files only, so there is no FastAPI process to talk to.
+ * Rather than every page failing with a 405 from the static host, the console
+ * probes `/health` once: a live envelope means the Python service is reachable
+ * and stays authoritative, anything else switches the whole app to the
+ * in-browser backend that persists sessions in IndexedDB.
+ */
+export type BackendMode = "remote" | "local";
+
+let resolvedMode: BackendMode | null = null;
+let modePromise: Promise<BackendMode> | null = null;
+
+function probeHealth(): Promise<BackendMode> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4_000);
+  return fetch(`${API_BASE}/health`, {
+    headers: { Accept: "application/json" },
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) return "local" as BackendMode;
+      const text = await response.text();
+      try {
+        const payload = JSON.parse(text) as { status?: unknown };
+        return payload?.status === "ok" ? ("remote" as BackendMode) : ("local" as BackendMode);
+      } catch {
+        // A static host answers unknown paths with its HTML shell, not JSON.
+        return "local" as BackendMode;
+      }
+    })
+    .catch(() => "local" as BackendMode)
+    .finally(() => clearTimeout(timer));
+}
+
+/** Resolve the backend once per page load. */
+export function backendMode(): Promise<BackendMode> {
+  if (resolvedMode) return Promise.resolve(resolvedMode);
+  if (!modePromise) {
+    const explicit = Boolean(import.meta.env.VITE_API_BASE_URL);
+    const testing = import.meta.env.MODE === "test";
+    modePromise = explicit || testing
+      ? Promise.resolve("remote" as BackendMode)
+      : probeHealth();
+    void modePromise.then((mode) => {
+      resolvedMode = mode;
+    });
+  }
+  return modePromise;
+}
+
+/** Synchronous answer once the probe has settled; false before that. */
+export function isLocalBackend(): boolean {
+  return resolvedMode === "local";
+}
+
+/** Only used by tests and the boot screen to force a known mode. */
+export function setBackendMode(mode: BackendMode): void {
+  resolvedMode = mode;
+  modePromise = Promise.resolve(mode);
+}
+
+// Loaded only when the probe says there is no server, so a deployment talking
+// to its own API never downloads the IndexedDB implementation.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LocalApi = Record<string, (...args: any[]) => Promise<unknown>>;
+let localModule: LocalApi | null = null;
+const localReady = import("./local/localApi").then((module) => {
+  localModule = module.localApi as unknown as LocalApi;
+  return localModule;
+});
+
+async function pick(key: string, args: unknown[]): Promise<unknown> {
+  const mode = await backendMode();
+  const backend = mode === "remote" ? (remoteApi as unknown as LocalApi) : localModule ?? (await localReady);
+  const fn = backend[key];
+  if (typeof fn !== "function") throw new ApiError(501, "not_implemented", `No backend implements ${key}.`);
+  return fn(...args);
+}
+
+/** The single API surface the pages import. It awaits the backend choice and
+ * forwards to the Python service or the in-browser implementation. */
+export const api: typeof remoteApi = new Proxy(remoteApi, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver) as unknown;
+    if (typeof value !== "function") return value;
+    return (...args: unknown[]) => pick(String(property), args);
+  },
+});
 
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) return error.message;

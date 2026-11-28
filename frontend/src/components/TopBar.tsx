@@ -19,11 +19,14 @@ export function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const label =
     phase === "online"
       ? "API online"
-      : phase === "offline"
-        ? "API offline"
-        : "Connecting";
+      : phase === "local"
+        ? "Browser engine"
+        : phase === "offline"
+          ? "API offline"
+          : "Connecting";
 
-  const tone: StatusTone = phase === "online" ? "ok" : phase === "offline" ? "bad" : "muted";
+  const tone: StatusTone =
+    phase === "online" || phase === "local" ? "ok" : phase === "offline" ? "bad" : "muted";
 
   return (
     <header className="topbar">

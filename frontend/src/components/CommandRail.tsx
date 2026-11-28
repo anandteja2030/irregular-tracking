@@ -25,7 +25,13 @@ export function CommandRail() {
     : 0;
 
   const engine =
-    phase === "online" ? "ONLINE" : phase === "offline" ? "OFFLINE" : "LINKING";
+    phase === "online"
+      ? "ONLINE"
+      : phase === "local"
+        ? "BROWSER"
+        : phase === "offline"
+          ? "OFFLINE"
+          : "LINKING";
   const source = selected?.source.label ?? selected?.source.kind ?? null;
   const resolution = selected
     ? formatResolution(selected.processing.width, selected.processing.height)

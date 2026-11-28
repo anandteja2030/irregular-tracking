@@ -12,6 +12,8 @@ import {
   type LocalTrack,
 } from "../lib/browserVision";
 import { cameraErrorMessage, liveElapsed } from "../lib/live";
+import { saveLiveSession } from "../lib/local/pipeline";
+import type { StoredObservation, StoredPreview } from "../lib/local/store";
 import type { Level } from "../lib/types";
 
 type Phase = "idle" | "starting" | "live" | "error";
@@ -72,6 +74,56 @@ interface LocalLiveCaptureProps {
   onActiveChange?: (active: boolean) => void;
   /** Suppresses the page-level capture protocol copy when hosted elsewhere. */
   title?: string;
+  /** Called with the stored session id after “Stop & save”. */
+  onFinished?: (sessionId: string) => void;
+}
+
+interface Recorder {
+  observations: StoredObservation[];
+  previews: StoredPreview[];
+  frameIndex: number;
+  startedMs: number;
+  startedTs: string;
+  label: string;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+}
+
+/** JPEG of what the operator sees: the frame, optionally with the boxes. */
+function stageSnapshot(
+  video: HTMLVideoElement,
+  tracks: LocalTrack[],
+  frameWidth: number,
+  frameHeight: number,
+  annotate: boolean,
+): string | null {
+  const sourceWidth = video.videoWidth;
+  const sourceHeight = video.videoHeight;
+  if (!sourceWidth || !sourceHeight) return null;
+  const width = Math.min(560, sourceWidth);
+  const ratio = width / sourceWidth;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = Math.max(1, Math.round(sourceHeight * ratio));
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (annotate) {
+    const kx = frameWidth > 0 ? canvas.width / frameWidth : 1;
+    const ky = frameHeight > 0 ? canvas.height / frameHeight : 1;
+    context.lineWidth = 2;
+    context.font = "600 11px ui-monospace, monospace";
+    for (const track of tracks) {
+      if (track.frames < 2) continue;
+      const [bx, by, bw, bh] = track.box;
+      context.strokeStyle = LEVEL_HEX[track.level];
+      context.strokeRect(bx * kx, by * ky, bw * kx, bh * ky);
+      context.fillStyle = LEVEL_HEX[track.level];
+      context.fillText(`T${String(track.id).padStart(2, "0")}`, bx * kx + 2, Math.max(10, by * ky - 3));
+    }
+  }
+  return canvas.toDataURL("image/jpeg", 0.6);
 }
 
 /**
@@ -79,13 +131,13 @@ interface LocalLiveCaptureProps {
  *
  * The GitHub Pages build has no analysis service behind it, so this component
  * does the work locally: frames are read from the video element into a canvas,
- * measured, and drawn back over the video. Nothing is uploaded and nothing is
- * persisted, which is why it states its own limits instead of pretending to be
- * the server pipeline.
+ * measured, and drawn back over the video. Nothing is uploaded; stopping the
+ * capture stores the measured run as a session in this browser.
  */
 export function LocalLiveCapture({
   onActiveChange,
   title = "Camera",
+  onFinished,
 }: LocalLiveCaptureProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -108,6 +160,8 @@ export function LocalLiveCapture({
   const startedAtRef = useRef(0);
   const lastFrameAtRef = useRef(0);
   const fpsWindowRef = useRef<number[]>([]);
+  const recorderRef = useRef<Recorder | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const stopLoop = useCallback(() => {
     runningRef.current = false;
@@ -255,6 +309,54 @@ export function LocalLiveCapture({
         sourceHeight,
       );
 
+      // Record the measured frame stream so “Stop & save” can persist a real
+      // session: same observations, tracks and levels the panels show.
+      const recorder = recorderRef.current;
+      if (recorder) {
+        const frameIndex = recorder.frameIndex;
+        recorder.frameIndex += 1;
+        const kx = sourceWidth / width;
+        const ky = sourceHeight / height;
+        for (const track of result.tracks) {
+          if (track.frames < 2) continue;
+          recorder.observations.push({
+            frame: frameIndex,
+            ts: (now - recorder.startedMs) / 1000,
+            trackId: track.id,
+            level: track.level,
+            score: track.score,
+            rule: Math.min(1, Math.max(0, track.score * 2)),
+            ml: null,
+            scene: track.score,
+            speed: track.speedPxS * kx,
+            direction: track.directionDeg,
+            areaPct: track.areaPct,
+            colour: track.colour,
+            box: [track.box[0] * kx, track.box[1] * ky, track.box[2] * kx, track.box[3] * ky],
+            centroid: [track.centroid[0] * kx, track.centroid[1] * ky],
+            seen: track.frames,
+          });
+        }
+        recorder.width = sourceWidth;
+        recorder.height = sourceHeight;
+        const window = fpsWindowRef.current;
+        recorder.fps = window.length
+          ? window.reduce((sum, value) => sum + value, 0) / window.length
+          : null;
+        if (frameIndex % 12 === 0 && recorder.previews.length < 40) {
+          const annotated = stageSnapshot(video, result.tracks, width, height, true);
+          const original = stageSnapshot(video, result.tracks, width, height, false);
+          if (annotated && original) {
+            recorder.previews.push({
+              frame: frameIndex,
+              tsS: (now - recorder.startedMs) / 1000,
+              annotated,
+              original,
+            });
+          }
+        }
+      }
+
       const interval = now - lastFrameAtRef.current;
       lastFrameAtRef.current = now;
       if (interval > 0 && interval < 5000) {
@@ -302,6 +404,17 @@ export function LocalLiveCapture({
       if (width && height) setAspect(`${width} / ${height}`);
 
       engineRef.current = new LocalVisionEngine();
+      recorderRef.current = {
+        observations: [],
+        previews: [],
+        frameIndex: 0,
+        startedMs: performance.now(),
+        startedTs: new Date().toISOString(),
+        label: devices.find((device) => device.deviceId === deviceId)?.label || "Live camera",
+        width: null,
+        height: null,
+        fps: null,
+      };
       startedAtRef.current = performance.now();
       lastFrameAtRef.current = startedAtRef.current;
       fpsWindowRef.current = [];
@@ -323,14 +436,36 @@ export function LocalLiveCapture({
     }
   }, [deviceId, onActiveChange, step, stopCamera]);
 
-  const stop = useCallback(() => {
+  /** Stop the camera and persist what the engine measured as a session. */
+  const stopAndSave = useCallback(async () => {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
     stopCamera();
     setPhase("idle");
     onActiveChange?.(false);
     const canvas = overlayRef.current;
     const context = canvas?.getContext("2d");
     if (canvas && context) context.clearRect(0, 0, canvas.width, canvas.height);
-  }, [onActiveChange, stopCamera]);
+    if (!recorder || recorder.observations.length === 0) return;
+    setSaving(true);
+    try {
+      const session = await saveLiveSession({
+        label: recorder.label,
+        width: recorder.width,
+        height: recorder.height,
+        observations: recorder.observations,
+        previews: recorder.previews,
+        elapsedS: (performance.now() - recorder.startedMs) / 1000,
+        startedTs: recorder.startedTs,
+        measuredFps: recorder.fps,
+      });
+      onFinished?.(session.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The capture could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }, [onActiveChange, onFinished, stopCamera]);
 
   useEffect(() => {
     if (phase !== "idle") return;
@@ -362,12 +497,17 @@ export function LocalLiveCapture({
         title={title}
         sub="Background subtraction · blob tracking · scene baseline"
         actions={
-          phase === "live" ? (
-            <button type="button" className="btn btn--quiet btn--sm" onClick={stop}>
+          phase === "live" || saving ? (
+            <button
+              type="button"
+              className="btn btn--quiet btn--sm"
+              onClick={() => void stopAndSave()}
+              disabled={saving}
+            >
               <span className="btn__icon">
                 <StopIcon width={13} height={13} />
               </span>
-              Stop
+              {saving ? "Saving session…" : "Stop & save"}
             </button>
           ) : (
             <button

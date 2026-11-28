@@ -9,13 +9,21 @@ export function Sidebar() {
   const phase = apiPhase(health);
 
   const statusLabel =
-    phase === "online" ? "API LINKED" : phase === "offline" ? "API OFFLINE" : "LINKING";
+    phase === "online"
+      ? "API LINKED"
+      : phase === "local"
+        ? "BROWSER ENGINE"
+        : phase === "offline"
+          ? "API OFFLINE"
+          : "LINKING";
   const statusSub =
     phase === "online"
       ? `v${health.data?.version ?? "—"} · ${health.data?.uptime_s ?? 0}s uptime`
-      : phase === "offline"
-        ? "service unreachable"
-        : "handshake in progress";
+      : phase === "local"
+        ? "sessions stored in this browser"
+        : phase === "offline"
+          ? "service unreachable"
+          : "handshake in progress";
 
   return (
     <aside className="rail" aria-label="Workspace navigation">

@@ -76,8 +76,8 @@ const LOCAL_STEPS = [
     text: "Each track's measured speed is scored against the scene's own baseline and becomes Normal, Suspicious or Irregular.",
   },
   {
-    title: "Nothing is saved",
-    text: "This deployment has no API, so the capture is live-only: no session, report or export is written.",
+    title: "Save the session",
+    text: "“Stop & save” writes the capture as a session in this browser: observations, tracks, events, previews and the scene baseline.",
   },
 ];
 
@@ -137,7 +137,9 @@ export function VideoStudioPage() {
   // With no API there is nothing to post frames to, so live capture runs the
   // in-browser engine instead of failing with a 405 from the static host.
   const health = useApiHealth();
-  const apiOffline = apiPhase(health) === "offline";
+  // Anything other than a live server API (no server, or not answered yet)
+  // means the page must use the engine that runs in this tab.
+  const localCapture = apiPhase(health) !== "online";
 
   const sources = useResource(api.sources, { pollMs: 120_000 });
   const system = useResource(api.system, { pollMs: 60_000 });
@@ -435,11 +437,10 @@ export function VideoStudioPage() {
       <div className="mode-note">
         <span className="mini-label">What the engine tracks</span>
         <p>
-          File runs detect saturated colour shapes through calibrated HSV ranges. A live capture
-          adds moving-foreground detection on top, so grey or dull objects are followed while
-          they move. Both paths share the same Kalman/Hungarian tracker, self-calibrating scene
-          baseline, rule + Isolation Forest + scene fusion and explanation text — the difference
-          is only what can be detected, never how an object is judged.
+          File runs and live capture both use the in-browser engine: changed pixels are grouped into
+          regions, matched frame to frame so an object keeps one ID, and each measured speed is
+          scored against the scene's own learned baseline. No frame leaves the device, and a clip
+          is analysed in this tab rather than uploaded to a server.
         </p>
         <p>
           Every object is drawn with a stable ID, its measured path and a heading arrow. Levels
@@ -493,6 +494,7 @@ export function VideoStudioPage() {
             busy={busy}
             limits={intakeLimits}
             limitsReported={Boolean(system.data?.limits)}
+            local={localCapture}
             onFile={handleFile}
             onCancelUpload={() => {
               uploadAbort.current?.abort();
@@ -529,20 +531,24 @@ export function VideoStudioPage() {
       </div>
       ) : (
         <div className="studio-live">
-          {apiOffline ? (
+          {localCapture ? (
             <div className="stack gap-14">
               <div className="alert alert--warn" role="status">
                 <RadioIcon width={14} height={14} />
                 <div className="alert__body">
                   <p className="alert__title">Local capture — the analysis runs in this tab</p>
                   <p className="alert__text">
-                    The server API is not reachable from this deployment, so frames are measured
-                    here with the in-browser engine instead of being posted. Nothing is uploaded,
-                    and the capture is not saved as a session.
+                    No server API answers this deployment, so frames are measured here with the
+                    in-browser engine. Stopping the capture saves the session, its tracks, events
+                    and previews to this browser — nothing is uploaded anywhere.
                   </p>
                 </div>
               </div>
-              <LocalLiveCapture title="Live camera" onActiveChange={setLiveActive} />
+              <LocalLiveCapture
+                title="Live camera"
+                onActiveChange={setLiveActive}
+                onFinished={handleLiveFinished}
+              />
             </div>
           ) : (
             <LiveCameraPanel onFinished={handleLiveFinished} onActiveChange={setLiveActive} />
@@ -552,18 +558,18 @@ export function VideoStudioPage() {
             <Panel
               title="Capture protocol"
               sub={
-                apiOffline
+                localCapture
                   ? "What the in-browser engine does with each frame"
                   : "What the live engine does with each frame"
               }
               actions={
                 <span className="tag mono">
-                  {(apiOffline ? LOCAL_STEPS : LIVE_STEPS).length} stages
+                  {(localCapture ? LOCAL_STEPS : LIVE_STEPS).length} stages
                 </span>
               }
             >
               <ol className="protocol-steps">
-                {(apiOffline ? LOCAL_STEPS : LIVE_STEPS).map((step, index) => (
+                {(localCapture ? LOCAL_STEPS : LIVE_STEPS).map((step, index) => (
                   <li key={step.title} className="protocol-step">
                     <span className="protocol-step__index mono" aria-hidden="true">
                       {String(index + 1).padStart(2, "0")}

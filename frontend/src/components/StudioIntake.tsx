@@ -25,6 +25,8 @@ interface StudioIntakeProps {
   busy: boolean;
   limits?: VideoIntakeLimits;
   limitsReported?: boolean;
+  /** True when the clip is read in this browser instead of posted to an API. */
+  local?: boolean;
   onFile: (file: File) => void;
   onCancelUpload: () => void;
   onAnalyse: () => void;
@@ -42,6 +44,7 @@ export function StudioIntake({
   busy,
   limits,
   limitsReported = false,
+  local = false,
   onFile,
   onCancelUpload,
   onAnalyse,
@@ -92,11 +95,19 @@ export function StudioIntake({
           <UploadIcon width={19} height={19} />
         </div>
         <p className="dropzone__title">
-          {uploading ? "Uploading to the analysis service" : "Drop a clip here, or choose a file"}
+          {uploading
+            ? local
+              ? "Reading the clip in this browser"
+              : "Uploading to the analysis service"
+            : "Drop a clip here, or choose a file"}
         </p>
         <p className="dropzone__hint">
           {extensions.join(" · ")} — up to {formatBytes(maxUploadBytes)}{" "}
-          {limitsReported ? "(reported by /system)" : "(fallback; the API still enforces its cap)"}
+          {local
+            ? "(in-browser cap; the clip never leaves this device)"
+            : limitsReported
+              ? "(reported by /system)"
+              : "(fallback; the API still enforces its cap)"}
         </p>
         <div className="dropzone__actions">
           <button
@@ -107,7 +118,9 @@ export function StudioIntake({
           >
             Choose file
           </button>
-          <span className="dropzone__meta mono">post /api/v1/videos/upload</span>
+          <span className="dropzone__meta mono">
+            {local ? "decode · analyse · store in this browser" : "post /api/v1/videos/upload"}
+          </span>
         </div>
         {dragging && <span className="dropzone__overlay">Release to upload</span>}
       </div>
@@ -155,7 +168,11 @@ export function StudioIntake({
             />
           </div>
           <div className="upload-progress__foot">
-            <span className="hint">The file is streamed to disk; decoding is verified server-side.</span>
+            <span className="hint">
+              {local
+                ? "Bytes are counted as the clip is read into this tab."
+                : "The file is streamed to disk; decoding is verified server-side."}
+            </span>
             <button type="button" className="btn btn--quiet btn--sm" onClick={onCancelUpload}>
               Cancel upload
             </button>
@@ -230,8 +247,9 @@ export function StudioIntake({
 
       {upload.status === "done" && record && (
         <p className="hint hint--flush">
-          Uploaded files are removed by the API after its retention window; the analysis result is persisted
-          separately as a session.
+          {local
+            ? "The clip and the resulting session stay in this browser only; clearing site data removes them."
+            : "Uploaded files are removed by the API after its retention window; the analysis result is persisted separately as a session."}
         </p>
       )}
     </div>

@@ -8,6 +8,8 @@ export interface Health {
   status: string;
   version: string;
   uptime_s: number;
+  /** Present on the in-browser backend: no server answered this probe. */
+  backend?: "local" | "remote";
 }
 
 export interface StorageEntry {

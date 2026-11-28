@@ -1,0 +1,41 @@
+{
+  "directory": "public/samples",
+  "sources": [
+    {
+      "name": "anomaly_clip.mp4",
+      "path": "samples/anomaly_clip.mp4",
+      "bytes": 1333082,
+      "synthetic": true,
+      "kind": "video",
+      "fps": 30.0,
+      "frames": 420,
+      "width": 640,
+      "height": 360,
+      "durationS": 14.0
+    },
+    {
+      "name": "normal_traffic.mp4",
+      "path": "samples/normal_traffic.mp4",
+      "bytes": 877060,
+      "synthetic": true,
+      "kind": "video",
+      "fps": 30.0,
+      "frames": 300,
+      "width": 640,
+      "height": 360,
+      "durationS": 10.0
+    },
+    {
+      "name": "tiny_noise.mp4",
+      "path": "samples/tiny_noise.mp4",
+      "bytes": 110509,
+      "synthetic": true,
+      "kind": "video",
+      "fps": 10.0,
+      "frames": 40,
+      "width": 320,
+      "height": 240,
+      "durationS": 4.0
+    }
+  ]
+}

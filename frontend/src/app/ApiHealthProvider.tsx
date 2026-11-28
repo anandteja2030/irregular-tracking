@@ -23,9 +23,12 @@ export function useApiHealth(): ResourceState<Health> {
   return value;
 }
 
-export type ApiPhase = "linking" | "online" | "offline";
+export type ApiPhase = "linking" | "online" | "offline" | "local";
 
 export function apiPhase(health: ResourceState<Health>): ApiPhase {
+  // The in-browser backend answers this probe itself; it is running, but no
+  // server API exists, so pages must not offer server-only flows.
+  if (health.data?.backend === "local") return "local";
   // A failed poll must win over the last healthy payload: keeping the previous
   // "ok" data is useful for rendering, but it is not current liveness.
   if (health.error || health.status === "error") return "offline";
