@@ -1,0 +1,23 @@
+# Render blueprint for the analysis engine behind the GitHub Pages console.
+#
+# The Pages site (https://anandteja2030.github.io/irregular-tracking/) is static
+# files only, so the Python service that sees, tracks and scores frames runs
+# here instead. Free plan: 0.1 CPU / 512 MB, sleeps after 15 idle minutes and
+# wakes on the next request. The container writes its SQLite database and
+# uploads to an ephemeral filesystem, so history does not survive a restart.
+services:
+  - type: web
+    name: irregular-tracking-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # The console's origin on GitHub Pages; the API rejects other origins.
+      - key: NEURAL_ALLOWED_ORIGINS
+        value: https://anandteja2030.github.io
+      # Render injects PORT itself; the image defaults to 8000 when it is unset.
+      - key: PYTHONUNBUFFERED
+        value: "1"
