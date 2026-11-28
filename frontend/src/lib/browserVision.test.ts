@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BackgroundModel,
   LocalVisionEngine,
+  frameDifference,
   SceneBaseline,
   Tracker,
   detectBlobs,
@@ -12,6 +13,7 @@ import {
   scoreForZScore,
   toGray,
   type Blob,
+  type LocalFrame,
 } from "./browserVision";
 
 const W = 64;
@@ -106,6 +108,17 @@ describe("dominantColour", () => {
   });
 });
 
+describe("frameDifference", () => {
+  it("marks the pixels that changed between two frames", () => {
+    const diff = frameDifference(
+      toGray(dark.data, W, H),
+      toGray(withSquare(20).data, W, H),
+    );
+    expect(diff.filter((value) => value === 1).length).toBeGreaterThan(30);
+    expect(diff.filter((value) => value === 1).length).toBeLessThanOrEqual(8 * 8);
+  });
+});
+
 describe("Tracker", () => {
   const blobAt = (cx: number): Blob => ({
     x: cx - 4,
@@ -168,27 +181,69 @@ describe("scoring", () => {
   });
 });
 
-describe("LocalVisionEngine", () => {
-  it("measures the true speed of a moving object despite the motion trail", () => {
-    // A 4 px move every 100 ms is 40 px/s; the trail behind the square is what
-    // makes a plain centroid under-read it, so this is the accuracy check.
-    const engine = new LocalVisionEngine({ minArea: 10 });
-    let last = engine.analyse(withSquare(4), 0);
-    expect(last.skipped).toBe(true); // first frame seeds the background
-    for (let i = 1; i < 12; i += 1) {
-      last = engine.analyse(withSquare(4 + i * 4), i * 100);
-      expect(last.tracks).toHaveLength(1);
+/** A textured room with a textured object in it, which is what a camera sees.
+ *  A flat square on a flat background only differs at its edges, so it would
+ *  not exercise the background model the way a real scene does. */
+const ROOM_W = 96;
+const ROOM_H = 72;
+
+function room(left: number | null, size = 20): ImageData {
+  const data = new Uint8ClampedArray(ROOM_W * ROOM_H * 4);
+  for (let y = 0; y < ROOM_H; y += 1) {
+    for (let x = 0; x < ROOM_W; x += 1) {
+      const inside = left !== null && x >= left && x < left + size && y >= 26 && y < 26 + size;
+      const checker = ((x >> 3) + (y >> 3)) % 2 === 0 ? 70 : 120;
+      const value = inside ? ((x + y) % 5 === 0 ? 230 : 160) : checker;
+      const p = (y * ROOM_W + x) * 4;
+      data[p] = value;
+      data[p + 1] = value;
+      data[p + 2] = value;
+      data[p + 3] = 255;
     }
+  }
+  return { data, width: ROOM_W, height: ROOM_H } as ImageData;
+}
+
+function trackAt(stepPxPerFrame: number): LocalFrame {
+  // Keep the object inside the room for the whole run.
+  const frames = Math.min(12, Math.floor((ROOM_W - 4 - 20) / stepPxPerFrame));
+  const engine = new LocalVisionEngine({ minArea: 10 });
+  let last = engine.analyse(room(null), 0);
+  for (let i = 1; i < 4; i += 1) last = engine.analyse(room(null), i * 100); // empty room first
+  for (let i = 0; i < frames; i += 1) {
+    last = engine.analyse(room(4 + i * stepPxPerFrame), (4 + i) * 100);
+  }
+  return last;
+}
+
+describe("LocalVisionEngine", () => {
+  it.each([
+    [3, 30],
+    [6, 60],
+    [9, 90],
+  ])("measures a known %i px/frame object at %i px/s", (step, truth) => {
+    const last = trackAt(step);
+    expect(last.tracks).toHaveLength(1);
     const track = last.tracks[0];
-    expect(track.frames).toBeGreaterThanOrEqual(10);
-    expect(track.speedPxS).toBeGreaterThan(34);
-    expect(track.speedPxS).toBeLessThan(46);
-    expect(track.directionDeg).not.toBeNull();
-    expect(Math.abs(track.directionDeg ?? 0)).toBeLessThan(5);
-    expect(track.box[2]).toBeGreaterThan(0);
+    expect(track.speedPxS).toBeGreaterThan(truth * 0.85);
+    expect(track.speedPxS).toBeLessThan(truth * 1.15);
+    expect(Math.abs(track.directionDeg ?? 180)).toBeLessThan(8);
+    // Dilation adds a small margin around the 20 px object; a box many times
+    // the object's size would mean the motion trail is being reported.
+    expect(track.box[2]).toBeGreaterThan(18);
+    expect(track.box[2]).toBeLessThan(34);
     expect(track.areaPct).toBeGreaterThan(0);
+    expect(track.frames).toBeGreaterThanOrEqual(7);
     expect(last.processMs).toBeGreaterThanOrEqual(0);
     expect(["Normal", "Suspicious", "Irregular"]).toContain(track.level);
+  });
+
+  it("reports nothing for an empty room", () => {
+    const engine = new LocalVisionEngine({ minArea: 10 });
+    let last = engine.analyse(room(null), 0);
+    for (let i = 1; i < 8; i += 1) last = engine.analyse(room(null), i * 100);
+    expect(last.skipped).toBe(false);
+    expect(last.tracks).toHaveLength(0);
   });
 
   it("reports baseline progress and resets cleanly", () => {

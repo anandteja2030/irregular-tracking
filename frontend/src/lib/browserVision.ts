@@ -77,32 +77,64 @@ export function toGray(data: Uint8ClampedArray, width: number, height: number): 
   return gray;
 }
 
+export interface MotionFieldResult {
+  /** Pixels that differ from the learned background. */
+  mask: Uint8Array;
+  /** Pixels that differ from the previous frame. */
+  difference: Uint8Array;
+  /** Mean absolute pixel change, 0–255. */
+  changeLevel: number;
+  /** True when the frame was discarded (first frame, or an illumination jump). */
+  skipped: boolean;
+}
+
 /**
- * Running-average background model with the same illumination guard the Python
+ * Running-average background model with the illumination guard the Python
  * pipeline uses: when most of the frame changes at once (exposure change, lamp
  * switched on) the difference is not motion, so the frame is discarded and the
  * model re-adapts instead of reporting the whole scene as objects.
+ *
+ * Adaptation is selective. Pixels that currently belong to an object are held
+ * still, otherwise a large object would slowly be absorbed into the background
+ * and shrink into a thin outline. A pixel that stays still for `stillFrames`
+ * while still differing from the background is a *ghost* — the place an object
+ * has left — and is released back into the background then.
  */
 export class BackgroundModel {
   private mean: Float32Array | null = null;
-  /** 0 disables adaptation; 1 replaces the model with the new frame. */
+  private previous: Uint8Array | null = null;
+  private still: Uint16Array | null = null;
+
   constructor(
     private readonly alpha = 0.06,
     readonly resetRatio = 0.45,
+    private readonly stillFrames = 40,
   ) {}
 
   reset(): void {
     this.mean = null;
+    this.previous = null;
+    this.still = null;
   }
 
-  /** Returns the motion mask, or null when the frame was discarded. */
-  update(gray: Uint8Array): { mask: Uint8Array; changeLevel: number; skipped: boolean } {
+  /** Returns the motion mask, or an empty result when the frame was discarded. */
+  update(gray: Uint8Array): MotionFieldResult {
     if (!this.mean || this.mean.length !== gray.length) {
       this.mean = Float32Array.from(gray);
-      return { mask: new Uint8Array(gray.length), changeLevel: 0, skipped: true };
+      this.previous = Uint8Array.from(gray);
+      this.still = new Uint16Array(gray.length);
+      return {
+        mask: new Uint8Array(gray.length),
+        difference: new Uint8Array(gray.length),
+        changeLevel: 0,
+        skipped: true,
+      };
     }
     const mean = this.mean;
+    const previous = this.previous as Uint8Array;
+    const still = this.still as Uint16Array;
     const mask = new Uint8Array(gray.length);
+    const difference = new Uint8Array(gray.length);
     let changed = 0;
     let totalDelta = 0;
     // A fixed 8-bit threshold is stable across webcams; the guard below handles
@@ -115,17 +147,35 @@ export class BackgroundModel {
         mask[i] = 1;
         changed += 1;
       }
+      if (Math.abs(gray[i] - previous[i]) > 14) difference[i] = 1;
     }
     const ratio = changed / Math.max(1, gray.length);
     const changeLevel = totalDelta / Math.max(1, gray.length);
     if (ratio > this.resetRatio) {
       mean.set(gray);
-      return { mask: new Uint8Array(gray.length), changeLevel, skipped: true };
+      this.previous = Uint8Array.from(gray);
+      still.fill(0);
+      return { mask: new Uint8Array(gray.length), difference, changeLevel, skipped: true };
     }
     for (let i = 0; i < gray.length; i += 1) {
-      mean[i] += (gray[i] - mean[i]) * this.alpha;
+      if (!mask[i]) {
+        still[i] = 0;
+        mean[i] += (gray[i] - mean[i]) * this.alpha;
+        continue;
+      }
+      if (difference[i]) {
+        still[i] = 0;
+        continue;
+      }
+      if (still[i] < this.stillFrames) {
+        still[i] += 1;
+        continue;
+      }
+      // Static but different from the background for long enough: a ghost.
+      mean[i] += (gray[i] - mean[i]) * 0.2;
     }
-    return { mask, changeLevel, skipped: false };
+    this.previous = Uint8Array.from(gray);
+    return { mask, difference, changeLevel, skipped: false };
   }
 }
 
@@ -257,36 +307,50 @@ export function dominantColour(
   return "grey";
 }
 
+/** Per-pixel difference between two grey frames, as a binary mask. */
+export function frameDifference(
+  previous: Uint8Array,
+  current: Uint8Array,
+  threshold = 14,
+): Uint8Array {
+  const diff = new Uint8Array(current.length);
+  for (let i = 0; i < current.length; i += 1) {
+    if (Math.abs(current[i] - previous[i]) > threshold) diff[i] = 1;
+  }
+  return diff;
+}
+
 /**
- * Centroid of the pixels inside `blob` that also changed in this frame.
+ * Centroid of the pixels inside `blob` that changed since the previous frame.
  *
- * A moving object leaves a trail in a background-difference mask, and the
- * centroid of that whole region advances at roughly half the object's speed.
- * The pixels that are new this frame sit at the object's leading edge and move
- * with it, so they are what the tracker integrates.
+ * A moving object leaves a trail in the background-difference mask, so the
+ * centroid of that whole region lags behind the object and under-reads its
+ * speed. The frame-to-frame difference is anchored to the object instead: it
+ * holds the leading edge and the edge the object just vacated, and the midpoint
+ * of those two moves at the object's own speed.
  */
-export function leadingCentroid(
-  mask: Uint8Array,
-  previous: Uint8Array | null,
+export function motionCentroid(
+  difference: Uint8Array | null,
   width: number,
   blob: Blob,
 ): [number, number] | null {
-  if (!previous || previous.length !== mask.length) return null;
+  if (!difference || difference.length === 0) return null;
   let sumX = 0;
   let sumY = 0;
   let count = 0;
+  const height = Math.floor(difference.length / width);
   const x1 = Math.min(width - 1, blob.x + blob.width);
-  const y1 = Math.min(Math.floor(mask.length / width) - 1, blob.y + blob.height);
+  const y1 = Math.min(height - 1, blob.y + blob.height);
   for (let y = blob.y; y <= y1; y += 1) {
     for (let x = blob.x; x <= x1; x += 1) {
       const i = y * width + x;
-      if (!mask[i] || previous[i]) continue;
+      if (!difference[i]) continue;
       sumX += x;
       sumY += y;
       count += 1;
     }
   }
-  if (count < 8) return null;
+  if (count < 6) return null;
   return [sumX / count, sumY / count];
 }
 
@@ -491,7 +555,6 @@ export class LocalVisionEngine {
   private background: BackgroundModel;
   private readonly minArea: number;
   private readonly dilateRadius: number;
-  private previousMask: Uint8Array | null = null;
   private lastFrame: LocalFrame | null = null;
 
   constructor(options: EngineOptions = {}) {
@@ -504,7 +567,6 @@ export class LocalVisionEngine {
     this.background.reset();
     this.tracker.reset();
     this.baseline.reset();
-    this.previousMask = null;
     this.lastFrame = null;
   }
 
@@ -513,7 +575,7 @@ export class LocalVisionEngine {
     const started = performance.now();
     const { width, height, data } = image;
     const gray = toGray(data, width, height);
-    const { mask, changeLevel, skipped } = this.background.update(gray);
+    const { mask, difference, changeLevel, skipped } = this.background.update(gray);
     if (skipped) {
       const frame: LocalFrame = {
         frameWidth: width,
@@ -535,8 +597,7 @@ export class LocalVisionEngine {
     const closed = dilate(mask, width, height, this.dilateRadius);
     const blobs = detectBlobs(closed, width, height, this.minArea);
     const colours = blobs.map((blob) => dominantColour(data, mask, width, blob));
-    const leading = blobs.map((blob) => leadingCentroid(mask, this.previousMask, width, blob));
-    this.previousMask = mask;
+    const leading = blobs.map((blob) => motionCentroid(difference, width, blob));
     const tracked = this.tracker.update(
       blobs,
       timeMs,
