@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { AppRoutes } from "../App";
 import { ApiHealthProvider } from "../app/ApiHealthProvider";
@@ -153,7 +153,8 @@ describe("system settings", () => {
     renderSettings(fetchMock);
 
     expect(await screen.findByDisplayValue("640")).toBeTruthy();
-    expect(screen.getByText("API online")).toBeTruthy();
+    // The top bar also reports API state, so scope this to the page body.
+    expect(within(screen.getByRole("main")).getByText("API online")).toBeTruthy();
     expect(screen.getByText("ok · version 0.10.0")).toBeTruthy();
     expect(screen.getByText("16.0 MB")).toBeTruthy();
     expect(screen.getByText("24h 00m")).toBeTruthy();
@@ -249,7 +250,7 @@ describe("system settings", () => {
     );
 
     expect(await screen.findByText("API health check failed")).toBeTruthy();
-    expect(screen.getByText("API offline")).toBeTruthy();
+    expect(within(screen.getByRole("main")).getByText("API offline")).toBeTruthy();
     expect(screen.getByText("Configuration unavailable")).toBeTruthy();
     expect(screen.getByText("Job queue unavailable")).toBeTruthy();
   });

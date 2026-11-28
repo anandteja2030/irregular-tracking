@@ -13,11 +13,14 @@ export function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const health = useApiHealth();
   const phase = apiPhase(health);
 
+  // This badge reports the server API, not the in-browser engine: a static
+  // deployment can score frames locally while the API is absent, and saying
+  // "engine offline" there would contradict what the camera is doing.
   const label =
     phase === "online"
-      ? "Engine online"
+      ? "API online"
       : phase === "offline"
-        ? "Engine offline"
+        ? "API offline"
         : "Connecting";
 
   const tone: StatusTone = phase === "online" ? "ok" : phase === "offline" ? "bad" : "muted";

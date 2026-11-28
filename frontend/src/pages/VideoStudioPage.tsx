@@ -4,6 +4,7 @@ import { api, ApiError, describeError } from "../lib/api";
 import { useResource } from "../hooks/useResource";
 import { useJobStream } from "../hooks/useJobStream";
 import { useSession } from "../app/SessionProvider";
+import { apiPhase, useApiHealth } from "../app/ApiHealthProvider";
 import {
   ACCEPTED_EXTENSIONS,
   isActiveState,
@@ -21,6 +22,7 @@ import { EmptyState, ErrorState, LoadingRows } from "../components/StateViews";
 import { LevelBadge, LevelMeter, Score } from "../components/SessionBits";
 import { StudioIntake, type UploadState } from "../components/StudioIntake";
 import { LiveCameraPanel } from "../components/LiveCameraPanel";
+import { LocalLiveCapture } from "../components/LocalLiveCapture";
 import { QuantumFlow } from "../components/quantum";
 import { JobConsole } from "../components/JobConsole";
 import { FrameInvestigator } from "../components/FrameInvestigator";
@@ -56,6 +58,26 @@ const LIVE_STEPS = [
   {
     title: "Persist on stop",
     text: "“Stop & analyze” writes the capture as a session: observations, tracks, events, previews and the scene snapshot.",
+  },
+];
+
+/** Copy for the local-mode rail: the same stages, without an API hop. */
+const LOCAL_STEPS = [
+  {
+    title: "Grab one frame",
+    text: "The browser reads the current camera image into a canvas at up to 10 frames per second. No frame leaves the device.",
+  },
+  {
+    title: "Detect & track",
+    text: "Changed pixels are grouped into regions and matched to the previous frame, so an object keeps one ID while it moves.",
+  },
+  {
+    title: "Score & explain",
+    text: "Each track's measured speed is scored against the scene's own baseline and becomes Normal, Suspicious or Irregular.",
+  },
+  {
+    title: "Nothing is saved",
+    text: "This deployment has no API, so the capture is live-only: no session, report or export is written.",
   },
 ];
 
@@ -112,6 +134,10 @@ export function VideoStudioPage() {
 
   const stream = useJobStream(jobId);
   const job = stream.job;
+  // With no API there is nothing to post frames to, so live capture runs the
+  // in-browser engine instead of failing with a 405 from the static host.
+  const health = useApiHealth();
+  const apiOffline = apiPhase(health) === "offline";
 
   const sources = useResource(api.sources, { pollMs: 120_000 });
   const system = useResource(api.system, { pollMs: 60_000 });
@@ -503,16 +529,41 @@ export function VideoStudioPage() {
       </div>
       ) : (
         <div className="studio-live">
-          <LiveCameraPanel onFinished={handleLiveFinished} onActiveChange={setLiveActive} />
+          {apiOffline ? (
+            <div className="stack gap-14">
+              <div className="alert alert--warn" role="status">
+                <RadioIcon width={14} height={14} />
+                <div className="alert__body">
+                  <p className="alert__title">Local capture — the analysis runs in this tab</p>
+                  <p className="alert__text">
+                    The server API is not reachable from this deployment, so frames are measured
+                    here with the in-browser engine instead of being posted. Nothing is uploaded,
+                    and the capture is not saved as a session.
+                  </p>
+                </div>
+              </div>
+              <LocalLiveCapture title="Live camera" onActiveChange={setLiveActive} />
+            </div>
+          ) : (
+            <LiveCameraPanel onFinished={handleLiveFinished} onActiveChange={setLiveActive} />
+          )}
 
           <div className="studio-live__rail">
             <Panel
               title="Capture protocol"
-              sub="What the live engine does with each frame"
-              actions={<span className="tag mono">{LIVE_STEPS.length} stages</span>}
+              sub={
+                apiOffline
+                  ? "What the in-browser engine does with each frame"
+                  : "What the live engine does with each frame"
+              }
+              actions={
+                <span className="tag mono">
+                  {(apiOffline ? LOCAL_STEPS : LIVE_STEPS).length} stages
+                </span>
+              }
             >
               <ol className="protocol-steps">
-                {LIVE_STEPS.map((step, index) => (
+                {(apiOffline ? LOCAL_STEPS : LIVE_STEPS).map((step, index) => (
                   <li key={step.title} className="protocol-step">
                     <span className="protocol-step__index mono" aria-hidden="true">
                       {String(index + 1).padStart(2, "0")}

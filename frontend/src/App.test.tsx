@@ -41,7 +41,7 @@ describe("application shell", () => {
     renderAt("/");
 
     await waitFor(() => {
-      expect(screen.getByText("Engine offline")).toBeTruthy();
+      expect(screen.getByText("API offline")).toBeTruthy();
     });
     const hero = screen.getByRole("heading", { level: 2 });
     expect(hero.textContent).toBe("Engine unreachable");

@@ -195,8 +195,27 @@ describe("video studio intake", () => {
     fireEvent.click(live);
 
     expect(live.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: /start live tracking/i })).toBeTruthy();
+    // With no API this deployment captures locally instead of posting frames
+    // and failing with a 405 from the static host.
+    expect(await screen.findByText(/local capture — the analysis runs in this tab/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /start camera/i })).toBeTruthy();
     expect(screen.queryByLabelText("Video file")).toBeNull();
+  });
+
+  it("uses the API-backed live panel when the API answers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).includes("/health") ? json({ status: "ok" }) : json({}),
+      ),
+    );
+    renderStudio();
+
+    await waitFor(() => expect(screen.getByText("API online")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /live webcam tracking/i }));
+
+    expect(screen.getByRole("button", { name: /start live tracking/i })).toBeTruthy();
+    expect(screen.queryByText(/local capture — the analysis runs in this tab/i)).toBeNull();
   });
 
   it("rejects an unsupported file before anything is uploaded", async () => {
