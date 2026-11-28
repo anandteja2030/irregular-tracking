@@ -180,7 +180,11 @@ export function LocalVisionPage() {
     try {
       const result = engine.analyse(image, now);
       setFrame(result);
-      drawOverlay(result.tracks, sourceWidth, sourceHeight);
+      drawOverlay(
+        result.tracks.filter((track) => track.frames >= 2),
+        sourceWidth,
+        sourceHeight,
+      );
 
       const interval = now - lastFrameAtRef.current;
       lastFrameAtRef.current = now;
@@ -280,7 +284,12 @@ export function LocalVisionPage() {
     };
   }, [phase]);
 
-  const tracks = frame?.tracks ?? [];
+  // A region seen in a single frame is a candidate, not an object: it is what
+  // camera noise and encoder updates look like. Confirm before listing it, and
+  // keep the unconfirmed count visible rather than silently dropping it.
+  const allTracks = frame?.tracks ?? [];
+  const tracks = allTracks.filter((track) => track.frames >= 2);
+  const candidates = allTracks.length - tracks.length;
   const counts: Record<Level, number> = { Normal: 0, Suspicious: 0, Irregular: 0 };
   for (const track of tracks) counts[track.level] += 1;
 
@@ -384,7 +393,11 @@ export function LocalVisionPage() {
         <MetricCard
           label="TRACKS"
           value={tracks.length}
-          hint={frame ? `${frame.frameWidth}×${frame.frameHeight} analysis frame` : "no frame yet"}
+          hint={
+            frame
+              ? `${frame.frameWidth}×${frame.frameHeight} frame${candidates ? ` · ${candidates} candidate` : ""}`
+              : "no frame yet"
+          }
           tone="accent"
         />
         <MetricCard
