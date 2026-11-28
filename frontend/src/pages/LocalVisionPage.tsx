@@ -85,7 +85,14 @@ export function LocalVisionPage() {
 
   useEffect(() => () => stopCamera(), [stopCamera]);
 
-  const drawOverlay = useCallback((tracks: LocalTrack[], width: number, height: number) => {
+  const drawOverlay = useCallback(
+    (
+      tracks: LocalTrack[],
+      frameWidth: number,
+      frameHeight: number,
+      width: number,
+      height: number,
+    ) => {
     const canvas = overlayRef.current;
     if (!canvas) return;
     if (canvas.width !== width || canvas.height !== height) {
@@ -95,17 +102,28 @@ export function LocalVisionPage() {
     const context = canvas.getContext("2d");
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
+    // Track geometry is in analysis-frame pixels, which are smaller than the
+    // video: every coordinate, trail point and arrow has to be scaled up or the
+    // boxes land at the wrong size and position.
+    const kx = frameWidth > 0 ? width / frameWidth : 1;
+    const ky = frameHeight > 0 ? height / frameHeight : 1;
+    const point = ([px, py]: [number, number]): [number, number] => [px * kx, py * ky];
     const scale = Math.max(1, canvas.width / 480);
     for (const track of tracks) {
       const colour = LEVEL_HEX[track.level];
-      const [x, y, w, h] = track.box;
+      const [bx, by, bw, bh] = track.box;
+      const x = bx * kx;
+      const y = by * ky;
+      const w = bw * kx;
+      const h = bh * ky;
       if (track.trail.length > 1) {
         context.save();
         context.strokeStyle = colour;
         context.globalAlpha = 0.55;
         context.lineWidth = Math.max(1.5, 1.6 * scale);
         context.beginPath();
-        track.trail.forEach(([tx, ty], index) => {
+        track.trail.forEach((trailPoint, index) => {
+          const [tx, ty] = point(trailPoint);
           if (index === 0) context.moveTo(tx, ty);
           else context.lineTo(tx, ty);
         });
@@ -117,19 +135,17 @@ export function LocalVisionPage() {
       context.globalAlpha = 0.6;
       context.strokeRect(x, y, w, h);
       context.globalAlpha = 1;
+      const [cx, cy] = point(track.centroid);
       context.beginPath();
-      context.arc(track.centroid[0], track.centroid[1], 3 * scale, 0, Math.PI * 2);
+      context.arc(cx, cy, 3 * scale, 0, Math.PI * 2);
       context.fillStyle = colour;
       context.fill();
       if (track.directionDeg !== null && track.speedPxS > 1) {
         const radians = (track.directionDeg * Math.PI) / 180;
         const length = Math.max(14, Math.min(40, 10 + track.speedPxS / 12)) * scale;
         context.beginPath();
-        context.moveTo(track.centroid[0], track.centroid[1]);
-        context.lineTo(
-          track.centroid[0] + Math.cos(radians) * length,
-          track.centroid[1] + Math.sin(radians) * length,
-        );
+        context.moveTo(cx, cy);
+        context.lineTo(cx + Math.cos(radians) * length, cy + Math.sin(radians) * length);
         context.strokeStyle = colour;
         context.lineWidth = 2 * scale;
         context.stroke();
@@ -147,7 +163,9 @@ export function LocalVisionPage() {
       context.fillStyle = colour;
       context.fillText(label, x + pad - scale, labelY + labelHeight - 5 * scale);
     }
-  }, []);
+    },
+    [],
+  );
 
   const step = useCallback(async () => {
     if (!runningRef.current) return;
@@ -182,6 +200,8 @@ export function LocalVisionPage() {
       setFrame(result);
       drawOverlay(
         result.tracks.filter((track) => track.frames >= 2),
+        result.frameWidth,
+        result.frameHeight,
         sourceWidth,
         sourceHeight,
       );
