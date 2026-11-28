@@ -6,6 +6,7 @@ import { EmptyState } from "./StateViews";
 import { PlayIcon, StopIcon } from "./icons";
 import {
   COLOUR_HEX,
+  CONFIRMED_FRAMES,
   LocalVisionEngine,
   headingArrow,
   type LocalFrame,
@@ -115,7 +116,7 @@ function stageSnapshot(
     context.lineWidth = 2;
     context.font = "600 11px ui-monospace, monospace";
     for (const track of tracks) {
-      if (track.frames < 2) continue;
+      if (track.frames < CONFIRMED_FRAMES) continue;
       const [bx, by, bw, bh] = track.box;
       context.strokeStyle = LEVEL_HEX[track.level];
       context.strokeRect(bx * kx, by * ky, bw * kx, bh * ky);
@@ -302,7 +303,7 @@ export function LocalLiveCapture({
       const result = engine.analyse(image, now);
       setFrame(result);
       drawOverlay(
-        result.tracks.filter((track) => track.frames >= 2),
+        result.tracks.filter((track) => track.frames >= CONFIRMED_FRAMES),
         result.frameWidth,
         result.frameHeight,
         sourceWidth,
@@ -318,7 +319,7 @@ export function LocalLiveCapture({
         const kx = sourceWidth / width;
         const ky = sourceHeight / height;
         for (const track of result.tracks) {
-          if (track.frames < 2) continue;
+          if (track.frames < CONFIRMED_FRAMES) continue;
           recorder.observations.push({
             frame: frameIndex,
             ts: (now - recorder.startedMs) / 1000,
@@ -486,7 +487,7 @@ export function LocalLiveCapture({
   // camera noise and encoder updates look like. Confirm before listing it, and
   // keep the unconfirmed count visible rather than silently dropping it.
   const allTracks = frame?.tracks ?? [];
-  const tracks = allTracks.filter((track) => track.frames >= 2);
+  const tracks = allTracks.filter((track) => track.frames >= CONFIRMED_FRAMES);
   const candidates = allTracks.length - tracks.length;
   const counts: Record<Level, number> = { Normal: 0, Suspicious: 0, Irregular: 0 };
   for (const track of tracks) counts[track.level] += 1;

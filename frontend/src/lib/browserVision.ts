@@ -67,6 +67,10 @@ export interface LocalFrame {
 
 export const ANALYSIS_MIN_SAMPLES = 30;
 export const DEFAULT_MIN_BLOB_AREA = 12;
+/** Matched frames a region needs before it is reported as an object. */
+export const CONFIRMED_FRAMES = 3;
+/** Largest number of simultaneous objects one frame may report. */
+export const MAX_TRACKS_PER_FRAME = 12;
 
 /** Luminance plane from RGBA pixels (Rec. 601 weights, rounded). */
 export function toGray(data: Uint8ClampedArray, width: number, height: number): Uint8Array {
@@ -104,17 +108,24 @@ export class BackgroundModel {
   private mean: Float32Array | null = null;
   private previous: Uint8Array | null = null;
   private still: Uint16Array | null = null;
+  private updates = 0;
+  /** Frames at the start of a capture where the model learns at full speed. */
+  private readonly warmupFrames = 6;
 
   constructor(
     private readonly alpha = 0.06,
     readonly resetRatio = 0.45,
-    private readonly stillFrames = 40,
+    // An object that leaves stays in the background difference for a while.
+    // Releasing that ghost quickly keeps it from merging with, or being
+    // reported as, a second object.
+    private readonly stillFrames = 15,
   ) {}
 
   reset(): void {
     this.mean = null;
     this.previous = null;
     this.still = null;
+    this.updates = 0;
   }
 
   /** Returns the motion mask, or an empty result when the frame was discarded. */
@@ -123,6 +134,7 @@ export class BackgroundModel {
       this.mean = Float32Array.from(gray);
       this.previous = Uint8Array.from(gray);
       this.still = new Uint16Array(gray.length);
+      this.updates = 1;
       return {
         mask: new Uint8Array(gray.length),
         difference: new Uint8Array(gray.length),
@@ -133,6 +145,12 @@ export class BackgroundModel {
     const mean = this.mean;
     const previous = this.previous as Uint8Array;
     const still = this.still as Uint16Array;
+    this.updates += 1;
+    // The very first frames seed the background, so anything already in view
+    // is baked into it. Learning them quickly stops that object becoming a
+    // permanent hole at its original position (which splits it in two when it
+    // moves away).
+    const alpha = this.updates <= this.warmupFrames ? 0.5 : this.alpha;
     const mask = new Uint8Array(gray.length);
     const difference = new Uint8Array(gray.length);
     let changed = 0;
@@ -160,7 +178,7 @@ export class BackgroundModel {
     for (let i = 0; i < gray.length; i += 1) {
       if (!mask[i]) {
         still[i] = 0;
-        mean[i] += (gray[i] - mean[i]) * this.alpha;
+        mean[i] += (gray[i] - mean[i]) * alpha;
         continue;
       }
       if (difference[i]) {
@@ -177,6 +195,24 @@ export class BackgroundModel {
     this.previous = Uint8Array.from(gray);
     return { mask, difference, changeLevel, skipped: false };
   }
+}
+
+/** Pixels inside a blob's box that changed since the previous frame. */
+export function changedInBlob(
+  difference: Uint8Array,
+  width: number,
+  blob: Blob,
+): number {
+  const height = Math.floor(difference.length / width);
+  let changed = 0;
+  const x1 = Math.min(width - 1, blob.x + blob.width);
+  const y1 = Math.min(height - 1, blob.y + blob.height);
+  for (let y = blob.y; y <= y1; y += 1) {
+    for (let x = blob.x; x <= x1; x += 1) {
+      if (difference[y * width + x]) changed += 1;
+    }
+  }
+  return changed;
 }
 
 /** Square dilation. Radius 1 closes single-pixel gaps; a larger radius also
@@ -198,6 +234,93 @@ export function dilate(mask: Uint8Array, width: number, height: number, radius =
     }
   }
   return out;
+}
+
+/**
+ * Fills enclosed holes in a binary mask.
+ *
+ * Background subtraction leaves a hole wherever the object currently covers
+ * the pixels it occupied when the background was learned, which cuts one
+ * object into two slivers. Filling every zero region that cannot reach the
+ * border turns those slivers back into one object.
+ */
+export function fillHoles(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const out = Uint8Array.from(mask);
+  const reachable = new Uint8Array(mask.length);
+  const queue: number[] = [];
+  const push = (index: number) => {
+    if (index < 0 || index >= mask.length || out[index] || reachable[index]) return;
+    reachable[index] = 1;
+    queue.push(index);
+  };
+  for (let x = 0; x < width; x += 1) {
+    push(x);
+    push((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    push(y * width);
+    push(y * width + width - 1);
+  }
+  while (queue.length) {
+    const index = queue.pop() as number;
+    const x = index % width;
+    if (x > 0) push(index - 1);
+    if (x < width - 1) push(index + 1);
+    push(index - width);
+    push(index + width);
+  }
+  for (let i = 0; i < out.length; i += 1) {
+    if (!out[i] && !reachable[i]) out[i] = 1;
+  }
+  return out;
+}
+
+/**
+ * Joins fragments that belong to one object.
+ *
+ * When an object's interior matches the learned background (it was already in
+ * view when the background was seeded) the difference mask keeps only its two
+ * edges, and connected components yield two thin vertical slivers. They sit at
+ * the same height with a small gap, so they are one object; genuinely separate
+ * objects are joined only when their boxes nearly touch.
+ */
+export function mergeFragments(blobs: Blob[]): Blob[] {
+  const merged: Blob[] = [];
+  for (const blob of blobs) {
+    const target = merged.find((candidate) => {
+      const sameRow =
+        Math.min(candidate.y + candidate.height, blob.y + blob.height) -
+          Math.max(candidate.y, blob.y) >
+        0.5 * Math.min(candidate.height, blob.height);
+      const horizontalGap =
+        Math.max(candidate.x, blob.x) - Math.min(candidate.x + candidate.width, blob.x + blob.width);
+      const sameColumn =
+        Math.min(candidate.x + candidate.width, blob.x + blob.width) -
+          Math.max(candidate.x, blob.x) >
+        0.5 * Math.min(candidate.width, blob.width);
+      const verticalGap =
+        Math.max(candidate.y, blob.y) - Math.min(candidate.y + candidate.height, blob.y + blob.height);
+      const limit = 0.55 * Math.max(candidate.height, blob.height);
+      return (sameRow && horizontalGap <= limit) || (sameColumn && verticalGap <= limit);
+    });
+    if (!target) {
+      merged.push({ ...blob });
+      continue;
+    }
+    const x1 = Math.min(target.x, blob.x);
+    const y1 = Math.min(target.y, blob.y);
+    const x2 = Math.max(target.x + target.width, blob.x + blob.width);
+    const y2 = Math.max(target.y + target.height, blob.y + blob.height);
+    const area = target.area + blob.area;
+    target.cx = (target.cx * target.area + blob.cx * blob.area) / area;
+    target.cy = (target.cy * target.area + blob.cy * blob.area) / area;
+    target.area = area;
+    target.x = x1;
+    target.y = y1;
+    target.width = x2 - x1;
+    target.height = y2 - y1;
+  }
+  return merged;
 }
 
 /** Connected components of a binary mask, keeping regions of at least `minArea`. */
@@ -382,6 +505,8 @@ interface TrackState {
   scoreSmoothed: number;
   colour: string;
   lastSeen: number;
+  /** Raw blob area of the last match, used to reject size-incompatible jumps. */
+  area: number;
 }
 
 /**
@@ -418,7 +543,10 @@ export class Tracker {
     colours: string[] = [],
     leading: [number, number][] = [],
   ): TrackState[] {
-    const maxDistance = Math.max(28, 0.22 * Math.hypot(width, height));
+    // The gate has to cover one frame of plausible motion, not a quarter of
+    // the view: too wide and an identity can teleport onto any nearby region,
+    // which is what makes trails criss-cross the whole frame.
+    const baseGate = Math.max(16, 0.09 * Math.hypot(width, height));
     const unmatched = new Set(blobs.map((_, index) => index));
     for (const track of this.tracks) {
       const [px, py] = track.motion;
@@ -427,10 +555,16 @@ export class Tracker {
         px + track.velocity[0] * dt,
         py + track.velocity[1] * dt,
       ];
+      // A slow frame rate allows proportionally more travel; a fast one less.
+      const maxDistance = baseGate * Math.min(2, Math.max(0.5, dt / 0.1));
       let bestIndex = -1;
       let bestDistance = Infinity;
       for (const index of unmatched) {
         const blob = blobs[index];
+        // A region four times larger or smaller than the tracked one is a
+        // different object (or the background moving), never the same identity.
+        const ratio = blob.area / Math.max(1, track.area);
+        if (ratio > 3.5 || ratio < 0.3) continue;
         const distance = Math.hypot(blob.cx - predicted[0], blob.cy - predicted[1]);
         if (distance < bestDistance && distance <= maxDistance) {
           bestDistance = distance;
@@ -463,6 +597,7 @@ export class Tracker {
       track.centroid = [blob.cx, blob.cy];
       track.motion = [motion[0], motion[1]];
       track.box = [blob.x, blob.y, blob.width, blob.height];
+      track.area = blob.area;
       track.trail = [...track.trail, track.centroid].slice(-24);
       track.frames += 1;
       track.misses = 0;
@@ -485,6 +620,7 @@ export class Tracker {
         scoreSmoothed: 0,
         colour: colours[index] ?? "grey",
         lastSeen: timeMs,
+        area: blob.area,
       };
       this.tracks.push(track);
     }
@@ -558,7 +694,9 @@ export class LocalVisionEngine {
   private lastFrame: LocalFrame | null = null;
 
   constructor(options: EngineOptions = {}) {
-    this.minArea = options.minArea ?? DEFAULT_MIN_BLOB_AREA;
+    // 0 means "scale with the frame": a fixed 12-pixel floor made camera noise
+    // into objects at any resolution.
+    this.minArea = options.minArea ?? 0;
     this.dilateRadius = options.dilateRadius ?? 2;
     this.background = new BackgroundModel(options.alpha ?? 0.06);
   }
@@ -594,19 +732,30 @@ export class LocalVisionEngine {
       return frame;
     }
 
-    const closed = dilate(mask, width, height, this.dilateRadius);
-    const blobs = detectBlobs(closed, width, height, this.minArea);
-    const colours = blobs.map((blob) => dominantColour(data, mask, width, blob));
-    const leading = blobs.map((blob) => motionCentroid(difference, width, blob));
+    const closed = fillHoles(dilate(mask, width, height, this.dilateRadius), width, height);
+    const frameArea = width * height;
+    const minArea = this.minArea > 0 ? this.minArea : Math.max(24, Math.round(0.00055 * frameArea));
+    const blobs = detectBlobs(closed, width, height, minArea)
+      // A region covering half the view is an exposure change or a lens wipe,
+      // not an object; a sliver is noise. Neither should become a track.
+      .filter((blob) => blob.area <= frameArea * 0.5 && blob.width >= 4 && blob.height >= 4)
+      // The patch an object has just left is still in the background mask but
+      // nothing is moving there. Requiring changed pixels inside the region is
+      // what separates a real object from its own ghost.
+      .filter((blob) => changedInBlob(difference, width, blob) >= Math.max(4, blob.area * 0.01))
+      .sort((a, b) => b.area - a.area)
+      .slice(0, MAX_TRACKS_PER_FRAME);
+    const objects = mergeFragments(blobs);
+    const colours = objects.map((blob) => dominantColour(data, mask, width, blob));
+    const leading = objects.map((blob) => motionCentroid(difference, width, blob));
     const tracked = this.tracker.update(
-      blobs,
+      objects,
       timeMs,
       width,
       height,
       colours,
-      leading.map((point, index) => point ?? [blobs[index].cx, blobs[index].cy]),
+      leading.map((point, index) => point ?? [objects[index].cx, objects[index].cy]),
     );
-    const frameArea = width * height;
 
     const tracks: LocalTrack[] = tracked.map((state) => {
       const z = this.baseline.zScore(state.speed);

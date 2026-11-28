@@ -9,7 +9,7 @@
  * pixels per second, the source frame rate is `null` when the container does
  * not report it, and a value that was not measured is never substituted.
  */
-import { LocalVisionEngine, ANALYSIS_MIN_SAMPLES } from "../browserVision";
+import { CONFIRMED_FRAMES, LocalVisionEngine, ANALYSIS_MIN_SAMPLES } from "../browserVision";
 import type { LocalTrack } from "../browserVision";
 import type { Level } from "../types";
 import { putSession, type StoredObservation, type StoredPreview, type StoredSession } from "./store";
@@ -150,7 +150,7 @@ function annotate(
   context.lineWidth = 2;
   context.font = "600 11px ui-monospace, monospace";
   for (const track of tracks) {
-    if (track.frames < 2) continue;
+    if (track.frames < CONFIRMED_FRAMES) continue;
     const [x, y, w, h] = track.box.map((value) => value * scale) as [number, number, number, number];
     context.strokeStyle = LEVEL_HEX[track.level] ?? "#8a94a6";
     context.strokeRect(x * ratio, y * ratio, w * ratio, h * ratio);
@@ -251,7 +251,7 @@ export async function analyseVideo(
       const frame = engine.analyse(image, index * (1000 / VIDEO_SAMPLE_FPS));
 
       for (const track of frame.tracks) {
-        if (track.frames < 2) continue;
+        if (track.frames < CONFIRMED_FRAMES) continue;
         observations.push({
           frame: index,
           ts: t,
